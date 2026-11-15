@@ -22,10 +22,14 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
 
-      - name: Accept Android SDK Licenses & Install SDK 36
+      - name: Accept Android SDK Licenses & Install SDK 36.1
         run: |
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager "platform-tools" "platforms;android-36.1" "build-tools;36.0.0" || sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0" || true
+          SDK_DIR="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          mkdir -p "$SDK_DIR/licenses"
+          printf "24333f8a63b6825ea9c5514f83c2829b004d1fee\n8933bad161af4178b1185d1a37fbf41ea5269c55\nd56f5187479451eabf01fb78af6dfcb131a6481e\n" > "$SDK_DIR/licenses/android-sdk-license"
+          printf "84831b9409646a918e30573bab4c9c91346d8abd\n" > "$SDK_DIR/licenses/android-sdk-preview-license"
+          yes | sdkmanager --sdk_root="$SDK_DIR" --licenses > /dev/null || true
+          sdkmanager --sdk_root="$SDK_DIR" "platform-tools" "platforms;android-36.1" "build-tools;36.0.0"
 
       - name: Set up Gradle 9.3.1
         uses: gradle/actions/setup-gradle@v6
@@ -44,7 +48,7 @@ jobs:
           fi
 
       - name: Build Debug APK
-        run: gradle :app:assembleDebug --no-daemon --stacktrace
+        run: gradle :app:assembleDebug --no-daemon --no-configuration-cache --max-workers=2 -Dorg.gradle.jvmargs="-Xmx3g -Dfile.encoding=UTF-8"
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
