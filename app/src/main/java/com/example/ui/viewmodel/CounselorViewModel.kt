@@ -34,13 +34,10 @@ import org.json.JSONObject
 
 sealed interface VaultState {
   data object Loading : VaultState
-  data object NeedsSetup : VaultState
-  data class Locked(val config: VaultConfigDto) : VaultState
+  data class LegacyPinMigration(val config: VaultConfigDto) : VaultState
   data class Unlocked(
     val config: VaultConfigDto,
     val masterKey: SecretKey,
-    val totpSecret: String? = null,
-    val freshRecoveryCode: String? = null,
   ) : VaultState
   data class Error(val message: String) : VaultState
 }
@@ -93,10 +90,10 @@ class CounselorViewModel(
 ) : ViewModel() {
 
   private val unlockedKeyFlow = MutableStateFlow<SecretKey?>(null)
-  private val unlockedTotpSecretFlow = MutableStateFlow<String?>(null)
-  private val freshRecoveryCodeFlow = MutableStateFlow<String?>(null)
+  private val legacyMigrationConfigFlow = MutableStateFlow<VaultConfigDto?>(null)
   private val vaultActionErrorFlow = MutableStateFlow<String?>(null)
   private val vaultBusyFlow = MutableStateFlow(false)
+  private val autoInitErrorFlow = MutableStateFlow<String?>(null)
 
   val vaultActionError: StateFlow<String?> = vaultActionErrorFlow.asStateFlow()
   val vaultBusy: StateFlow<Boolean> = vaultBusyFlow.asStateFlow()
@@ -117,23 +114,28 @@ class CounselorViewModel(
       }
 
   val vaultState: StateFlow<VaultState> =
-    combine(rawVaultFlow, unlockedKeyFlow, unlockedTotpSecretFlow, freshRecoveryCodeFlow) {
-        configResult,
-        masterKey,
-        totpSecret,
-        recoveryCode ->
-        configResult.fold(
-          onSuccess = { config ->
+    combine(
+        rawVaultFlow,
+        unlockedKeyFlow,
+        legacyMigrationConfigFlow,
+        autoInitErrorFlow,
+      ) { configResult, masterKey, legacyConfig, initError ->
+        when {
+          initError != null -> VaultState.Error(initError)
+          configResult.isFailure ->
+            VaultState.Error(
+              configResult.exceptionOrNull()?.message
+                ?: "Gagal memuatkan konfigurasi penyulitan."
+            )
+          else -> {
+            val config = configResult.getOrNull()
             when {
-              config == null -> VaultState.NeedsSetup
-              masterKey == null -> VaultState.Locked(config)
-              else -> VaultState.Unlocked(config, masterKey, totpSecret, recoveryCode)
+              masterKey != null && config != null -> VaultState.Unlocked(config, masterKey)
+              legacyConfig != null -> VaultState.LegacyPinMigration(legacyConfig)
+              else -> VaultState.Loading
             }
-          },
-          onFailure = { err ->
-            VaultState.Error(err.message ?: "Gagal memuatkan konfigurasi peti besi keselamatan.")
-          },
-        )
+          }
+        }
       }
       .stateIn(
         scope = viewModelScope,
@@ -216,6 +218,12 @@ class CounselorViewModel(
 
   init {
     viewModelScope.launch {
+      rawVaultFlow.collect { result ->
+        if (result.isFailure || unlockedKeyFlow.value != null || vaultBusyFlow.value) return@collect
+        ensureAutoUnlocked(result.getOrNull())
+      }
+    }
+    viewModelScope.launch {
       recordsState.collect { state ->
         when (state) {
           is RecordsUiState.Success ->
@@ -252,49 +260,27 @@ class CounselorViewModel(
     _searchQuery.value = query
   }
 
-  fun clearVaultActionError() {
-    vaultActionErrorFlow.value = null
-  }
-
-  fun clearFreshRecoveryCode() {
-    freshRecoveryCodeFlow.value = null
-  }
-
   fun resetAiState() {
     _aiSummaryState.value = AiSummaryState.Idle
   }
 
-  // --- 2FA & E2EE Vault Operations ---
+  // --- Automatic Seamless E2EE Key Provisioning (No 2FA Friction) ---
 
-  fun setupVault(pin: String, enableTotp: Boolean) {
-    if (pin.length != 6 || !pin.all { it.isDigit() }) {
-      vaultActionErrorFlow.value = "PIN keselamatan mestilah tepat 6 digit nombor."
-      return
-    }
-    viewModelScope.launch {
-      vaultBusyFlow.value = true
-      vaultActionErrorFlow.value = null
-      try {
-        val result =
+  private fun autoVaultSecret(uid: String): String = "dk-e2ee-auto:$uid"
+
+  private suspend fun ensureAutoUnlocked(existingConfig: VaultConfigDto?) {
+    vaultBusyFlow.value = true
+    autoInitErrorFlow.value = null
+    try {
+      val secret = autoVaultSecret(currentUserId)
+      if (existingConfig == null) {
+        val payload =
           withContext(Dispatchers.Default) {
             val salt = E2eeCryptoManager.generateSaltBase64()
-            val kek = E2eeCryptoManager.deriveKeyFromPin(pin, salt)
-            val pinHash = E2eeCryptoManager.hashPinVerifier(pin, salt)
+            val kek = E2eeCryptoManager.deriveKeyFromPin(secret, salt)
+            val pinHash = E2eeCryptoManager.hashPinVerifier(secret, salt)
             val masterKey = E2eeCryptoManager.generateMasterKey()
             val wrappedMaster = E2eeCryptoManager.wrapSecretKey(masterKey, kek)
-            val recoveryCode = E2eeCryptoManager.generateRecoveryCode()
-            val recoveryHash = E2eeCryptoManager.sha256Base64(recoveryCode)
-
-            var totpSecret: String? = null
-            var wrappedTotpSecret: String? = null
-            var wrappedTotpIv: String? = null
-            if (enableTotp) {
-              totpSecret = E2eeCryptoManager.generateTotpSecret()
-              val encTotp = E2eeCryptoManager.encryptString(totpSecret, masterKey)
-              wrappedTotpSecret = encTotp.ciphertextBase64
-              wrappedTotpIv = encTotp.ivBase64
-            }
-
             val config =
               VaultConfigDto(
                 userId = currentUserId,
@@ -302,167 +288,128 @@ class CounselorViewModel(
                 kdfSalt = salt,
                 wrappedMasterKey = wrappedMaster.ciphertextBase64,
                 wrappedMasterKeyIv = wrappedMaster.ivBase64,
-                totpEnabled = enableTotp,
-                wrappedTotpSecret = wrappedTotpSecret,
-                wrappedTotpIv = wrappedTotpIv,
-                recoveryCodeHash = recoveryHash,
+                totpEnabled = false,
               )
-            SetupPayload(config, masterKey, totpSecret, recoveryCode)
+            AutoSetupPayload(config, masterKey)
           }
-
-        repository.saveVaultConfig(result.config, isNew = true)
-        unlockedKeyFlow.value = result.masterKey
-        unlockedTotpSecretFlow.value = result.totpSecret
-        freshRecoveryCodeFlow.value = result.recoveryCode
-      } catch (e: CancellationException) {
-        throw e
-      } catch (e: Exception) {
-        Log.e(TAG, "Vault setup failed", e)
-        vaultActionErrorFlow.value =
-          e.localizedMessage ?: "Gagal menyediakan peti besi penyulitan."
-      } finally {
-        vaultBusyFlow.value = false
+        repository.saveVaultConfig(payload.config, isNew = true)
+        unlockedKeyFlow.value = payload.masterKey
+        legacyMigrationConfigFlow.value = null
+      } else {
+        val autoMatched =
+          withContext(Dispatchers.Default) {
+            E2eeCryptoManager.verifyPin(secret, existingConfig.kdfSalt, existingConfig.pinHash)
+          }
+        if (autoMatched) {
+          val masterKey =
+            withContext(Dispatchers.Default) {
+              val kek = E2eeCryptoManager.deriveKeyFromPin(secret, existingConfig.kdfSalt)
+              E2eeCryptoManager.unwrapSecretKey(
+                existingConfig.wrappedMasterKey,
+                existingConfig.wrappedMasterKeyIv,
+                kek,
+              )
+            }
+          unlockedKeyFlow.value = masterKey
+          legacyMigrationConfigFlow.value = null
+        } else {
+          val existingRecords = repository.getEncryptedRecords()
+          if (existingRecords.isEmpty()) {
+            val payload =
+              withContext(Dispatchers.Default) {
+                val salt = E2eeCryptoManager.generateSaltBase64()
+                val kek = E2eeCryptoManager.deriveKeyFromPin(secret, salt)
+                val pinHash = E2eeCryptoManager.hashPinVerifier(secret, salt)
+                val masterKey = E2eeCryptoManager.generateMasterKey()
+                val wrappedMaster = E2eeCryptoManager.wrapSecretKey(masterKey, kek)
+                val updated =
+                  existingConfig.copy(
+                    pinHash = pinHash,
+                    kdfSalt = salt,
+                    wrappedMasterKey = wrappedMaster.ciphertextBase64,
+                    wrappedMasterKeyIv = wrappedMaster.ivBase64,
+                    totpEnabled = false,
+                    wrappedTotpSecret = null,
+                    wrappedTotpIv = null,
+                    recoveryCodeHash = null,
+                  )
+                AutoSetupPayload(updated, masterKey)
+              }
+            repository.saveVaultConfig(payload.config, isNew = false)
+            unlockedKeyFlow.value = payload.masterKey
+            legacyMigrationConfigFlow.value = null
+          } else {
+            legacyMigrationConfigFlow.value = existingConfig
+          }
+        }
       }
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      Log.e(TAG, "Auto E2EE vault setup/unlock failed", e)
+      autoInitErrorFlow.value = e.localizedMessage ?: "Gagal menyediakan kunci penyulitan E2EE."
+    } finally {
+      vaultBusyFlow.value = false
     }
   }
 
-  fun unlockVault(config: VaultConfigDto, pin: String, totpCode: String) {
-    if (pin.length != 6) {
-      vaultActionErrorFlow.value = "Sila masukkan PIN 6 digit."
-      return
-    }
-    if (config.totpEnabled && totpCode.trim().length != 6) {
-      vaultActionErrorFlow.value = "Sila masukkan kod pengesahan 2FA (6 digit)."
+  fun migrateLegacyPinToAutoE2ee(config: VaultConfigDto, oldPin: String) {
+    if (oldPin.length != 6) {
+      vaultActionErrorFlow.value = "Sila masukkan PIN lama 6 digit."
       return
     }
     viewModelScope.launch {
       vaultBusyFlow.value = true
       vaultActionErrorFlow.value = null
       try {
-        val unlocked =
+        val migrated =
           withContext(Dispatchers.Default) {
-            val pinOk = E2eeCryptoManager.verifyPin(pin, config.kdfSalt, config.pinHash)
-            if (!pinOk) {
-              throw IllegalArgumentException("PIN keselamatan tidak tepat.")
+            if (!E2eeCryptoManager.verifyPin(oldPin, config.kdfSalt, config.pinHash)) {
+              throw IllegalArgumentException("PIN lama tidak tepat.")
             }
-            val kek = E2eeCryptoManager.deriveKeyFromPin(pin, config.kdfSalt)
+            val oldKek = E2eeCryptoManager.deriveKeyFromPin(oldPin, config.kdfSalt)
             val masterKey =
               E2eeCryptoManager.unwrapSecretKey(
                 config.wrappedMasterKey,
                 config.wrappedMasterKeyIv,
-                kek,
+                oldKek,
               )
-            var totpSecret: String? = null
-            if (config.totpEnabled) {
-              val cipher = config.wrappedTotpSecret
-              val iv = config.wrappedTotpIv
-              if (cipher.isNullOrBlank() || iv.isNullOrBlank()) {
-                throw IllegalStateException("Konfigurasi TOTP rosak.")
-              }
-              totpSecret = E2eeCryptoManager.decryptString(cipher, iv, masterKey)
-              if (!E2eeCryptoManager.verifyTotpCode(totpSecret, totpCode)) {
-                throw IllegalArgumentException("Kod 2FA (TOTP) tidak sah atau telah tamat tempoh.")
-              }
-            }
-            UnlockedPayload(masterKey, totpSecret)
-          }
-        unlockedKeyFlow.value = unlocked.masterKey
-        unlockedTotpSecretFlow.value = unlocked.totpSecret
-      } catch (e: CancellationException) {
-        throw e
-      } catch (e: Exception) {
-        Log.w(TAG, "Unlock vault failed: ${e.message}")
-        vaultActionErrorFlow.value = e.message ?: "Pengesahan 2FA gagal."
-      } finally {
-        vaultBusyFlow.value = false
-      }
-    }
-  }
-
-  fun toggleTotpTwoFactor(enable: Boolean, onDone: (String?) -> Unit = {}) {
-    val state = vaultState.value as? VaultState.Unlocked ?: return
-    viewModelScope.launch {
-      vaultBusyFlow.value = true
-      vaultActionErrorFlow.value = null
-      try {
-        val newTotpSecret: String?
-        val updatedConfig: VaultConfigDto
-        if (enable) {
-          val secret = E2eeCryptoManager.generateTotpSecret()
-          val enc = E2eeCryptoManager.encryptString(secret, state.masterKey)
-          newTotpSecret = secret
-          updatedConfig =
-            state.config.copy(
-              totpEnabled = true,
-              wrappedTotpSecret = enc.ciphertextBase64,
-              wrappedTotpIv = enc.ivBase64,
-            )
-        } else {
-          newTotpSecret = null
-          updatedConfig =
-            state.config.copy(
-              totpEnabled = false,
-              wrappedTotpSecret = null,
-              wrappedTotpIv = null,
-            )
-        }
-        repository.saveVaultConfig(updatedConfig, isNew = false)
-        unlockedTotpSecretFlow.value = newTotpSecret
-        onDone(newTotpSecret)
-      } catch (e: CancellationException) {
-        throw e
-      } catch (e: Exception) {
-        Log.e(TAG, "Failed to update 2FA TOTP setting", e)
-        vaultActionErrorFlow.value = e.localizedMessage ?: "Gagal mengemas kini tetapan 2FA."
-      } finally {
-        vaultBusyFlow.value = false
-      }
-    }
-  }
-
-  fun changeSecurityPin(currentPin: String, newPin: String, onSuccess: () -> Unit) {
-    val state = vaultState.value as? VaultState.Unlocked ?: return
-    if (newPin.length != 6 || !newPin.all { it.isDigit() }) {
-      vaultActionErrorFlow.value = "PIN baharu mestilah tepat 6 digit."
-      return
-    }
-    viewModelScope.launch {
-      vaultBusyFlow.value = true
-      vaultActionErrorFlow.value = null
-      try {
-        val updatedConfig =
-          withContext(Dispatchers.Default) {
-            if (!E2eeCryptoManager.verifyPin(currentPin, state.config.kdfSalt, state.config.pinHash)) {
-              throw IllegalArgumentException("PIN semasa tidak tepat.")
-            }
+            val autoSecret = autoVaultSecret(currentUserId)
             val newSalt = E2eeCryptoManager.generateSaltBase64()
-            val newKek = E2eeCryptoManager.deriveKeyFromPin(newPin, newSalt)
-            val newHash = E2eeCryptoManager.hashPinVerifier(newPin, newSalt)
-            val newWrapped = E2eeCryptoManager.wrapSecretKey(state.masterKey, newKek)
-            state.config.copy(
-              pinHash = newHash,
-              kdfSalt = newSalt,
-              wrappedMasterKey = newWrapped.ciphertextBase64,
-              wrappedMasterKeyIv = newWrapped.ivBase64,
-            )
+            val newKek = E2eeCryptoManager.deriveKeyFromPin(autoSecret, newSalt)
+            val newPinHash = E2eeCryptoManager.hashPinVerifier(autoSecret, newSalt)
+            val newWrapped = E2eeCryptoManager.wrapSecretKey(masterKey, newKek)
+            val updated =
+              config.copy(
+                pinHash = newPinHash,
+                kdfSalt = newSalt,
+                wrappedMasterKey = newWrapped.ciphertextBase64,
+                wrappedMasterKeyIv = newWrapped.ivBase64,
+                totpEnabled = false,
+                wrappedTotpSecret = null,
+                wrappedTotpIv = null,
+                recoveryCodeHash = null,
+              )
+            AutoSetupPayload(updated, masterKey)
           }
-        repository.saveVaultConfig(updatedConfig, isNew = false)
-        onSuccess()
+        repository.saveVaultConfig(migrated.config, isNew = false)
+        unlockedKeyFlow.value = migrated.masterKey
+        legacyMigrationConfigFlow.value = null
       } catch (e: CancellationException) {
         throw e
       } catch (e: Exception) {
-        vaultActionErrorFlow.value = e.message ?: "Gagal menukar PIN."
+        vaultActionErrorFlow.value = e.message ?: "Gagal menyahsulit rekod lama."
       } finally {
         vaultBusyFlow.value = false
       }
     }
   }
 
-  fun lockVault() {
+  fun clearSessionKey() {
     unlockedKeyFlow.value = null
-    unlockedTotpSecretFlow.value = null
-    freshRecoveryCodeFlow.value = null
+    legacyMigrationConfigFlow.value = null
     vaultActionErrorFlow.value = null
+    autoInitErrorFlow.value = null
   }
 
   // --- AI Summary Generation ---
@@ -657,16 +604,9 @@ class CounselorViewModel(
     )
   }
 
-  private data class SetupPayload(
+  private data class AutoSetupPayload(
     val config: VaultConfigDto,
     val masterKey: SecretKey,
-    val totpSecret: String?,
-    val recoveryCode: String,
-  )
-
-  private data class UnlockedPayload(
-    val masterKey: SecretKey,
-    val totpSecret: String?,
   )
 
   private companion object {

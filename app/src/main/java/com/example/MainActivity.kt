@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -26,7 +25,6 @@ import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.Book
 import androidx.compose.material.icons.outlined.Security
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExtendedFloatingActionButton
@@ -51,7 +49,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.credentials.CredentialManager
@@ -73,11 +70,10 @@ import com.example.data.repository.CounselorRepository
 import com.example.model.ActivityCategory
 import com.example.ui.screens.AuthScreen
 import com.example.ui.screens.DashboardScreen
+import com.example.ui.screens.LegacyPinMigrationScreen
 import com.example.ui.screens.RecordEditorScreen
 import com.example.ui.screens.RecordsListScreen
 import com.example.ui.screens.SecurityBackupScreen
-import com.example.ui.screens.VaultSetupScreen
-import com.example.ui.screens.VaultUnlockScreen
 import com.example.ui.theme.DiariKaunselorTheme
 import com.example.ui.viewmodel.CounselorViewModel
 import com.example.ui.viewmodel.RecordsUiState
@@ -178,7 +174,7 @@ private fun AuthenticatedCounselorApp(
   val vaultActionError by viewModel.vaultActionError.collectAsStateWithLifecycle()
 
   fun performSignOut() {
-    viewModel.lockVault()
+    viewModel.clearSessionKey()
     GoogleAuthHelper.signOut(credentialManager, scope)
   }
 
@@ -189,30 +185,19 @@ private fun AuthenticatedCounselorApp(
           CircularProgressIndicator()
           Spacer(modifier = Modifier.height(12.dp))
           Text(
-            text = "Memeriksa status peti besi keselamatan...",
+            text = "Menyediakan ruang kerja tersulit E2EE...",
             style = MaterialTheme.typography.bodyMedium,
           )
         }
       }
     }
 
-    VaultState.NeedsSetup -> {
-      VaultSetupScreen(
+    is VaultState.LegacyPinMigration -> {
+      LegacyPinMigrationScreen(
         userEmail = counselorEmail,
         isBusy = vaultBusy,
         errorMessage = vaultActionError,
-        onSetupVault = { pin, enableTotp -> viewModel.setupVault(pin, enableTotp) },
-        onSignOut = { performSignOut() },
-      )
-    }
-
-    is VaultState.Locked -> {
-      VaultUnlockScreen(
-        config = state.config,
-        userEmail = counselorEmail,
-        isBusy = vaultBusy,
-        errorMessage = vaultActionError,
-        onUnlock = { pin, totp -> viewModel.unlockVault(state.config, pin, totp) },
+        onMigrate = { oldPin -> viewModel.migrateLegacyPinToAutoE2ee(state.config, oldPin) },
         onSignOut = { performSignOut() },
       )
     }
@@ -224,7 +209,7 @@ private fun AuthenticatedCounselorApp(
       ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
           Text(
-            text = "Ralat Sambungan Peti Besi",
+            text = "Ralat Sambungan Penyulitan",
             style = MaterialTheme.typography.titleLarge,
             color = MaterialTheme.colorScheme.error,
           )
@@ -239,7 +224,6 @@ private fun AuthenticatedCounselorApp(
     is VaultState.Unlocked -> {
       UnlockedCounselorShell(
         viewModel = viewModel,
-        unlockedVault = state,
         counselorName = counselorName,
         counselorEmail = counselorEmail,
         onSignOut = { performSignOut() },
@@ -251,7 +235,6 @@ private fun AuthenticatedCounselorApp(
 @Composable
 private fun UnlockedCounselorShell(
   viewModel: CounselorViewModel,
-  unlockedVault: VaultState.Unlocked,
   counselorName: String,
   counselorEmail: String,
   onSignOut: () -> Unit,
@@ -419,21 +402,7 @@ private fun UnlockedCounselorShell(
         composable(ROUTE_SECURITY) {
           SecurityBackupScreen(
             userEmail = counselorEmail,
-            vaultConfig = unlockedVault.config,
-            totpSecret = unlockedVault.totpSecret,
             cloudSyncState = cloudSyncState,
-            onToggleTotp = { enable ->
-              viewModel.toggleTotpTwoFactor(enable) {
-                Toast.makeText(
-                  context,
-                  if (enable) "Pengesahan TOTP 2FA diaktifkan."
-                  else "Pengesahan TOTP 2FA dimatikan.",
-                  Toast.LENGTH_SHORT,
-                )
-                  .show()
-              }
-            },
-            onChangePin = viewModel::changeSecurityPin,
             onVerifyCloudSync = {
               viewModel.verifyCloudBackupSync(
                 onComplete = { count ->
@@ -450,7 +419,6 @@ private fun UnlockedCounselorShell(
               )
             },
             onBuildEncryptedBackupJson = viewModel::buildEncryptedCloudBackupJson,
-            onLockVault = viewModel::lockVault,
             onSignOut = onSignOut,
           )
         }
@@ -497,50 +465,5 @@ private fun UnlockedCounselorShell(
         }
       }
     }
-  }
-
-  // One-time Recovery Code disclosure right after first Vault Setup
-  unlockedVault.freshRecoveryCode?.let { recoveryCode ->
-    AlertDialog(
-      onDismissRequest = { viewModel.clearFreshRecoveryCode() },
-      title = { Text("Simpan Kod Pemulihan Anda") },
-      text = {
-        Column {
-          Text(
-            text =
-              "Peti besi penyulitan E2EE & 2FA anda kini aktif. Simpan kod pemulihan kecemasan ini di tempat selamat:",
-            style = MaterialTheme.typography.bodyMedium,
-          )
-          Spacer(modifier = Modifier.height(12.dp))
-          Surface(
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            shape = RoundedCornerShape(10.dp),
-            modifier = Modifier.fillMaxWidth(),
-          ) {
-            Text(
-              text = recoveryCode,
-              style = MaterialTheme.typography.titleMedium,
-              fontFamily = FontFamily.Monospace,
-              fontWeight = FontWeight.Bold,
-              modifier = Modifier.padding(14.dp),
-            )
-          }
-          if (unlockedVault.totpSecret != null) {
-            Spacer(modifier = Modifier.height(10.dp))
-            Text(
-              text =
-                "Anda boleh menyemak kod TOTP 6-digit dan kunci Base32 pada bila-bila masa di tab Keselamatan.",
-              style = MaterialTheme.typography.bodySmall,
-              color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-          }
-        }
-      },
-      confirmButton = {
-        Button(onClick = { viewModel.clearFreshRecoveryCode() }) {
-          Text("Saya Telah Simpan")
-        }
-      },
-    )
   }
 }

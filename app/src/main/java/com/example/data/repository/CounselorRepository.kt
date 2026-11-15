@@ -117,8 +117,25 @@ class CounselorRepository(
         config.recoveryCodeHash?.let { payload["recoveryCodeHash"] = it }
         docRef.set(payload).await()
       } else {
-        requireNotNull(config.createdAt) { "VaultConfig createdAt tidak boleh null semasa kemas kini." }
-        docRef.set(config.copy(id = VAULT_DOC_ID, userId = uid, updatedAt = null)).await()
+        val createdAt =
+          requireNotNull(config.createdAt) {
+            "VaultConfig createdAt tidak boleh null semasa kemas kini."
+          }
+        val updatePayload =
+          mutableMapOf<String, Any>(
+            "userId" to uid,
+            "pinHash" to config.pinHash,
+            "kdfSalt" to config.kdfSalt,
+            "wrappedMasterKey" to config.wrappedMasterKey,
+            "wrappedMasterKeyIv" to config.wrappedMasterKeyIv,
+            "totpEnabled" to config.totpEnabled,
+            "wrappedTotpSecret" to (config.wrappedTotpSecret ?: FieldValue.delete()),
+            "wrappedTotpIv" to (config.wrappedTotpIv ?: FieldValue.delete()),
+            "recoveryCodeHash" to (config.recoveryCodeHash ?: FieldValue.delete()),
+            "createdAt" to createdAt,
+            "updatedAt" to FieldValue.serverTimestamp(),
+          )
+        docRef.set(updatePayload).await()
       }
     } catch (e: CancellationException) {
       throw e

@@ -29,15 +29,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.EnhancedEncryption
 import androidx.compose.material.icons.filled.Key
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -47,9 +46,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -79,7 +76,6 @@ import androidx.compose.ui.unit.dp
 import androidx.credentials.CredentialManager
 import com.example.R
 import com.example.auth.GoogleAuthHelper
-import com.example.model.VaultConfigDto
 import com.example.ui.theme.AccentCoral
 import com.example.ui.theme.AccentEmerald
 import com.example.ui.theme.AccentIndigo
@@ -142,7 +138,6 @@ fun AuthScreen(
           .padding(horizontal = 22.dp, vertical = 20.dp),
       horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-      // Hero Illustration with overlapping floating badge
       Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.BottomCenter) {
         Surface(
           shape = RoundedCornerShape(28.dp),
@@ -211,7 +206,7 @@ fun AuthScreen(
 
       Text(
         text =
-          "Ruang kerja digital moden untuk mencatat sesi kaunseling, menjana analisis AI berstruktur, dan mencetak laporan PDF/Word dengan penyulitan hujung ke hujung.",
+          "Ruang kerja digital moden untuk mencatat sesi kaunseling, menjana analisis AI berstruktur, dan mencetak laporan PDF/Word dengan penyulitan hujung ke hujung automatik.",
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         textAlign = TextAlign.Center,
@@ -224,8 +219,8 @@ fun AuthScreen(
         verticalArrangement = Arrangement.spacedBy(8.dp),
       ) {
         FeatureHighlightPill(Icons.Filled.AutoAwesome, "Rumusan AI", AccentCoral)
-        FeatureHighlightPill(Icons.Filled.EnhancedEncryption, "E2EE AES-256", AccentEmerald)
-        FeatureHighlightPill(Icons.Filled.Security, "2FA PIN & TOTP", AccentIndigo)
+        FeatureHighlightPill(Icons.Filled.EnhancedEncryption, "E2EE Automatik", AccentEmerald)
+        FeatureHighlightPill(Icons.Filled.Description, "PDF & Word", AccentIndigo)
         FeatureHighlightPill(Icons.Filled.CloudDone, "Sandaran Awan", AccentSky)
       }
 
@@ -243,13 +238,13 @@ fun AuthScreen(
           horizontalAlignment = Alignment.CenterHorizontally,
         ) {
           Text(
-            text = "Mulakan Sesi Selamat Anda",
+            text = "Mulakan Sesi Kerja Anda",
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
           )
           Spacer(modifier = Modifier.height(4.dp))
           Text(
-            text = "Pengesahan Faktor Pertama melalui Akaun Google",
+            text = "Log masuk pantas & selamat terus menggunakan Akaun Google",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
@@ -352,269 +347,25 @@ private fun FeatureHighlightPill(icon: ImageVector, label: String, accentColor: 
   }
 }
 
+/**
+ * Shown only once if an existing account already had encrypted records protected by an older manual
+ * PIN before 2FA removal, so data can be unlocked and migrated to seamless automatic E2EE.
+ */
 @Composable
-fun VaultSetupScreen(
+fun LegacyPinMigrationScreen(
   userEmail: String,
   isBusy: Boolean,
   errorMessage: String?,
-  onSetupVault: (pin: String, enableTotp: Boolean) -> Unit,
+  onMigrate: (oldPin: String) -> Unit,
   onSignOut: () -> Unit,
 ) {
-  var pin by rememberSaveable { mutableStateOf("") }
-  var confirmPin by rememberSaveable { mutableStateOf("") }
-  var enableTotp by rememberSaveable { mutableStateOf(true) }
+  var oldPin by rememberSaveable { mutableStateOf("") }
   var showPin by remember { mutableStateOf(false) }
-  var localError by remember { mutableStateOf<String?>(null) }
-
-  val glowColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
 
   Box(
     modifier =
       Modifier.fillMaxSize()
         .background(MaterialTheme.colorScheme.background)
-        .drawBehind {
-          drawCircle(
-            brush =
-              Brush.radialGradient(
-                colors = listOf(glowColor, Color.Transparent),
-                center = Offset(size.width * 0.5f, size.height * 0.14f),
-                radius = size.maxDimension * 0.45f,
-              )
-          )
-        }
-        .systemBarsPadding(),
-    contentAlignment = Alignment.Center,
-  ) {
-    Column(
-      modifier =
-        Modifier.fillMaxWidth()
-          .widthIn(max = 520.dp)
-          .verticalScroll(rememberScrollState())
-          .padding(24.dp),
-      horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-      Box(contentAlignment = Alignment.Center) {
-        Box(
-          modifier =
-            Modifier.size(88.dp)
-              .clip(CircleShape)
-              .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f))
-        )
-        Surface(
-          color = MaterialTheme.colorScheme.primaryContainer,
-          shape = CircleShape,
-          modifier = Modifier.size(66.dp),
-        ) {
-          Box(contentAlignment = Alignment.Center) {
-            Icon(
-              imageVector = Icons.Filled.EnhancedEncryption,
-              contentDescription = "Penyediaan Keselamatan 2FA",
-              tint = MaterialTheme.colorScheme.onPrimaryContainer,
-              modifier = Modifier.size(32.dp),
-            )
-          }
-        }
-      }
-
-      Spacer(modifier = Modifier.height(16.dp))
-
-      Text(
-        text = "Sediakan Peti Besi 2FA & E2EE",
-        style = MaterialTheme.typography.headlineMedium,
-        textAlign = TextAlign.Center,
-      )
-
-      Spacer(modifier = Modifier.height(6.dp))
-
-      Surface(
-        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
-        shape = RoundedCornerShape(50),
-      ) {
-        Text(
-          text = userEmail,
-          style = MaterialTheme.typography.labelMedium,
-          color = MaterialTheme.colorScheme.primary,
-          fontWeight = FontWeight.SemiBold,
-          modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
-        )
-      }
-
-      Spacer(modifier = Modifier.height(10.dp))
-
-      Text(
-        text =
-          "Tetapkan PIN Keselamatan 6-digit untuk melindungi kunci penyulitan AES-256-GCM bagi semua rekod sulit klien anda.",
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        textAlign = TextAlign.Center,
-      )
-
-      Spacer(modifier = Modifier.height(18.dp))
-
-      PinDotsIndicator(enteredCount = pin.length, accentColor = MaterialTheme.colorScheme.primary)
-
-      Spacer(modifier = Modifier.height(16.dp))
-
-      Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        shape = RoundedCornerShape(22.dp),
-        modifier = Modifier.fillMaxWidth(),
-      ) {
-        Column(modifier = Modifier.padding(18.dp)) {
-          OutlinedTextField(
-            value = pin,
-            onValueChange = { if (it.length <= 6 && it.all(Char::isDigit)) pin = it },
-            label = { Text("PIN Keselamatan (6 Digit)") },
-            singleLine = true,
-            shape = RoundedCornerShape(14.dp),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-            visualTransformation =
-              if (showPin) VisualTransformation.None else PasswordVisualTransformation(),
-            trailingIcon = {
-              IconButton(onClick = { showPin = !showPin }) {
-                Icon(
-                  imageVector = if (showPin) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
-                  contentDescription = "Tunjuk atau sembunyi PIN",
-                )
-              }
-            },
-            modifier = Modifier.fillMaxWidth().testTag("setup_pin_input"),
-          )
-
-          Spacer(modifier = Modifier.height(12.dp))
-
-          OutlinedTextField(
-            value = confirmPin,
-            onValueChange = { if (it.length <= 6 && it.all(Char::isDigit)) confirmPin = it },
-            label = { Text("Sahkan PIN Keselamatan") },
-            singleLine = true,
-            shape = RoundedCornerShape(14.dp),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-            visualTransformation =
-              if (showPin) VisualTransformation.None else PasswordVisualTransformation(),
-            modifier = Modifier.fillMaxWidth().testTag("setup_confirm_pin_input"),
-          )
-
-          Spacer(modifier = Modifier.height(16.dp))
-
-          Surface(
-            color = MaterialTheme.colorScheme.surfaceContainer,
-            shape = RoundedCornerShape(14.dp),
-            modifier = Modifier.fillMaxWidth(),
-          ) {
-            Row(
-              modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-              Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
-                Text(
-                  text = "Aktifkan Pengesahan TOTP 2FA",
-                  style = MaterialTheme.typography.titleSmall,
-                )
-                Text(
-                  text = "Lapisan kod 6-digit berasaskan masa (RFC 6238 Authenticator).",
-                  style = MaterialTheme.typography.bodySmall,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-              }
-              Switch(
-                checked = enableTotp,
-                onCheckedChange = { enableTotp = it },
-                modifier = Modifier.testTag("setup_totp_switch"),
-              )
-            }
-          }
-        }
-      }
-
-      val shownError = localError ?: errorMessage
-      if (shownError != null) {
-        Spacer(modifier = Modifier.height(12.dp))
-        Surface(
-          color = MaterialTheme.colorScheme.errorContainer,
-          shape = RoundedCornerShape(12.dp),
-          modifier = Modifier.fillMaxWidth(),
-        ) {
-          Text(
-            text = shownError,
-            color = MaterialTheme.colorScheme.error,
-            style = MaterialTheme.typography.bodySmall,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.padding(12.dp),
-          )
-        }
-      }
-
-      Spacer(modifier = Modifier.height(20.dp))
-
-      Button(
-        onClick = {
-          localError = null
-          when {
-            pin.length != 6 -> localError = "PIN mestilah tepat 6 digit."
-            pin != confirmPin -> localError = "PIN pengesahan tidak sepadan."
-            else -> onSetupVault(pin, enableTotp)
-          }
-        },
-        enabled = !isBusy,
-        modifier =
-          Modifier.fillMaxWidth().height(54.dp).testTag("complete_vault_setup_button"),
-        shape = RoundedCornerShape(16.dp),
-      ) {
-        if (isBusy) {
-          CircularProgressIndicator(
-            modifier = Modifier.size(22.dp),
-            color = MaterialTheme.colorScheme.onPrimary,
-            strokeWidth = 2.dp,
-          )
-        } else {
-          Text("Aktifkan Peti Besi & Masuk", style = MaterialTheme.typography.labelLarge)
-        }
-      }
-
-      Spacer(modifier = Modifier.height(10.dp))
-
-      TextButton(onClick = onSignOut) {
-        Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null, modifier = Modifier.size(18.dp))
-        Spacer(modifier = Modifier.width(6.dp))
-        Text("Log Keluar Akaun")
-      }
-    }
-  }
-}
-
-@Composable
-fun VaultUnlockScreen(
-  config: VaultConfigDto,
-  userEmail: String,
-  isBusy: Boolean,
-  errorMessage: String?,
-  onUnlock: (pin: String, totpCode: String) -> Unit,
-  onSignOut: () -> Unit,
-) {
-  var pin by rememberSaveable { mutableStateOf("") }
-  var totpCode by rememberSaveable { mutableStateOf("") }
-  var showPin by remember { mutableStateOf(false) }
-
-  val glowColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.12f)
-
-  Box(
-    modifier =
-      Modifier.fillMaxSize()
-        .background(MaterialTheme.colorScheme.background)
-        .drawBehind {
-          drawCircle(
-            brush =
-              Brush.radialGradient(
-                colors = listOf(glowColor, Color.Transparent),
-                center = Offset(size.width * 0.5f, size.height * 0.15f),
-                radius = size.maxDimension * 0.45f,
-              )
-          )
-        }
         .systemBarsPadding(),
     contentAlignment = Alignment.Center,
   ) {
@@ -626,157 +377,116 @@ fun VaultUnlockScreen(
           .padding(24.dp),
       horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-      Box(contentAlignment = Alignment.Center) {
-        Box(
-          modifier =
-            Modifier.size(90.dp)
-              .clip(CircleShape)
-              .background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.12f))
-        )
-        Surface(
-          color = MaterialTheme.colorScheme.secondaryContainer,
-          shape = CircleShape,
-          modifier = Modifier.size(68.dp),
-        ) {
-          Box(contentAlignment = Alignment.Center) {
-            Icon(
-              imageVector = Icons.Filled.Lock,
-              contentDescription = "Peti besi dikunci",
-              tint = MaterialTheme.colorScheme.onSecondaryContainer,
-              modifier = Modifier.size(32.dp),
-            )
-          }
+      Surface(
+        color = MaterialTheme.colorScheme.primaryContainer,
+        shape = CircleShape,
+        modifier = Modifier.size(68.dp),
+      ) {
+        Box(contentAlignment = Alignment.Center) {
+          Icon(
+            imageVector = Icons.Filled.LockOpen,
+            contentDescription = "Nyahsulit rekod terdahulu",
+            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+            modifier = Modifier.size(32.dp),
+          )
         }
       }
 
       Spacer(modifier = Modifier.height(16.dp))
 
       Text(
-        text = "Pengesahan Dua Faktor (2FA)",
-        style = MaterialTheme.typography.headlineMedium,
+        text = "Nyahsulit Rekod Lama (Sekali Sahaja)",
+        style = MaterialTheme.typography.headlineSmall,
         textAlign = TextAlign.Center,
       )
 
       Spacer(modifier = Modifier.height(6.dp))
 
-      Surface(
-        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f),
-        shape = RoundedCornerShape(50),
-      ) {
-        Text(
-          text = userEmail,
-          style = MaterialTheme.typography.labelMedium,
-          color = MaterialTheme.colorScheme.primary,
-          fontWeight = FontWeight.SemiBold,
-          modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
-        )
-      }
+      Text(
+        text = userEmail,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.primary,
+        fontWeight = FontWeight.SemiBold,
+      )
 
-      Spacer(modifier = Modifier.height(10.dp))
+      Spacer(modifier = Modifier.height(8.dp))
 
       Text(
         text =
-          if (config.totpEnabled) {
-            "Masukkan PIN keselamatan 6-digit dan kod TOTP Authenticator anda untuk menyahsulit rekod diari."
-          } else {
-            "Masukkan PIN keselamatan 6-digit anda untuk membuka peti besi penyulitan E2EE."
-          },
+          "Pengesahan 2FA telah dibuang. Masukkan PIN 6-digit terdahulu anda sekali sahaja untuk memindahkan rekod lama ke mod E2EE automatik.",
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         textAlign = TextAlign.Center,
       )
 
-      Spacer(modifier = Modifier.height(18.dp))
+      Spacer(modifier = Modifier.height(16.dp))
 
-      PinDotsIndicator(enteredCount = pin.length, accentColor = MaterialTheme.colorScheme.primary)
+      Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        repeat(6) { idx ->
+          val filled = idx < oldPin.length
+          val color by
+            animateColorAsState(
+              targetValue =
+                if (filled) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.outlineVariant,
+              label = "legacyPinDot",
+            )
+          Box(modifier = Modifier.size(12.dp).clip(CircleShape).background(color))
+        }
+      }
 
       Spacer(modifier = Modifier.height(16.dp))
 
-      Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        shape = RoundedCornerShape(22.dp),
-        modifier = Modifier.fillMaxWidth(),
-      ) {
-        Column(modifier = Modifier.padding(18.dp)) {
-          OutlinedTextField(
-            value = pin,
-            onValueChange = { if (it.length <= 6 && it.all(Char::isDigit)) pin = it },
-            label = { Text("PIN Keselamatan (6 Digit)") },
-            singleLine = true,
-            shape = RoundedCornerShape(14.dp),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-            visualTransformation =
-              if (showPin) VisualTransformation.None else PasswordVisualTransformation(),
-            trailingIcon = {
-              IconButton(onClick = { showPin = !showPin }) {
-                Icon(
-                  imageVector = if (showPin) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
-                  contentDescription = "Tunjuk atau sembunyi PIN",
-                )
-              }
-            },
-            modifier = Modifier.fillMaxWidth().testTag("vault_pin_input"),
-          )
-
-          if (config.totpEnabled) {
-            Spacer(modifier = Modifier.height(12.dp))
-            OutlinedTextField(
-              value = totpCode,
-              onValueChange = { if (it.length <= 6 && it.all(Char::isDigit)) totpCode = it },
-              label = { Text("Kod Pengesahan TOTP (6 Digit)") },
-              placeholder = { Text("cth. 482910") },
-              singleLine = true,
-              shape = RoundedCornerShape(14.dp),
-              keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-              modifier = Modifier.fillMaxWidth().testTag("vault_totp_input"),
+      OutlinedTextField(
+        value = oldPin,
+        onValueChange = { if (it.length <= 6 && it.all(Char::isDigit)) oldPin = it },
+        label = { Text("PIN Lama (6 Digit)") },
+        singleLine = true,
+        shape = RoundedCornerShape(14.dp),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+        visualTransformation =
+          if (showPin) VisualTransformation.None else PasswordVisualTransformation(),
+        trailingIcon = {
+          IconButton(onClick = { showPin = !showPin }) {
+            Icon(
+              imageVector = if (showPin) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+              contentDescription = "Tunjuk atau sembunyi PIN",
             )
           }
-        }
-      }
+        },
+        modifier = Modifier.fillMaxWidth().testTag("legacy_pin_input"),
+      )
 
       if (errorMessage != null) {
-        Spacer(modifier = Modifier.height(12.dp))
-        Surface(
-          color = MaterialTheme.colorScheme.errorContainer,
-          shape = RoundedCornerShape(12.dp),
-          modifier = Modifier.fillMaxWidth(),
-        ) {
-          Text(
-            text = errorMessage,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.error,
-            modifier = Modifier.padding(12.dp),
-            textAlign = TextAlign.Center,
-          )
-        }
+        Spacer(modifier = Modifier.height(10.dp))
+        Text(
+          text = errorMessage,
+          color = MaterialTheme.colorScheme.error,
+          style = MaterialTheme.typography.bodySmall,
+          textAlign = TextAlign.Center,
+        )
       }
 
-      Spacer(modifier = Modifier.height(20.dp))
+      Spacer(modifier = Modifier.height(18.dp))
 
       Button(
-        onClick = { onUnlock(pin, totpCode) },
-        enabled = !isBusy && pin.length == 6 && (!config.totpEnabled || totpCode.length == 6),
-        modifier = Modifier.fillMaxWidth().height(54.dp).testTag("unlock_vault_button"),
+        onClick = { onMigrate(oldPin) },
+        enabled = !isBusy && oldPin.length == 6,
+        modifier = Modifier.fillMaxWidth().height(52.dp).testTag("migrate_legacy_pin_button"),
         shape = RoundedCornerShape(16.dp),
-        colors =
-          ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
       ) {
         if (isBusy) {
           CircularProgressIndicator(
-            modifier = Modifier.size(22.dp),
+            modifier = Modifier.size(20.dp),
             color = MaterialTheme.colorScheme.onPrimary,
             strokeWidth = 2.dp,
           )
         } else {
-          Icon(Icons.Filled.Key, contentDescription = null, modifier = Modifier.size(18.dp))
-          Spacer(modifier = Modifier.width(8.dp))
-          Text("Buka Peti Besi & Nyahsulit", style = MaterialTheme.typography.labelLarge)
+          Text("Nyahsulit & Masuk Terus")
         }
       }
 
-      Spacer(modifier = Modifier.height(12.dp))
+      Spacer(modifier = Modifier.height(10.dp))
 
       OutlinedButton(
         onClick = onSignOut,
@@ -787,30 +497,6 @@ fun VaultUnlockScreen(
         Spacer(modifier = Modifier.width(8.dp))
         Text("Tukar Akaun Google")
       }
-    }
-  }
-}
-
-@Composable
-private fun PinDotsIndicator(
-  enteredCount: Int,
-  accentColor: Color,
-  totalDots: Int = 6,
-) {
-  Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-    repeat(totalDots) { index ->
-      val filled = index < enteredCount
-      val dotColor by
-        animateColorAsState(
-          targetValue = if (filled) accentColor else MaterialTheme.colorScheme.outlineVariant,
-          label = "pinDot",
-        )
-      Box(
-        modifier =
-          Modifier.size(if (filled) 14.dp else 12.dp)
-            .clip(CircleShape)
-            .background(dotColor)
-      )
     }
   }
 }
