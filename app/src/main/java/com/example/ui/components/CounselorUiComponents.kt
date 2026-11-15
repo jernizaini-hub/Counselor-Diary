@@ -12,8 +12,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.EventNote
 import androidx.compose.material.icons.filled.Campaign
-import androidx.compose.material.icons.filled.EventNote
 import androidx.compose.material.icons.filled.FamilyRestroom
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.HomeWork
@@ -52,7 +52,7 @@ fun rememberCategoryVisualMap(): Map<ActivityCategory, CategoryVisual> =
     ActivityCategory.KAUNSELING_INDIVIDU to CategoryVisual(AccentMint, Icons.Filled.Person),
     ActivityCategory.KAUNSELING_KELOMPOK to CategoryVisual(AccentEmerald, Icons.Filled.Groups),
     ActivityCategory.PROGRAM to CategoryVisual(AccentCoral, Icons.Filled.Campaign),
-    ActivityCategory.MESYUARAT to CategoryVisual(AccentIndigo, Icons.Filled.EventNote),
+    ActivityCategory.MESYUARAT to CategoryVisual(AccentIndigo, Icons.AutoMirrored.Filled.EventNote),
     ActivityCategory.KELAS_GANTI to CategoryVisual(AccentAmber, Icons.Filled.School),
     ActivityCategory.ZIARAH_CAKNA to CategoryVisual(AccentBerry, Icons.Filled.HomeWork),
     ActivityCategory.KONSULTASI_IBUBAPA to CategoryVisual(AccentSky, Icons.Filled.FamilyRestroom),
