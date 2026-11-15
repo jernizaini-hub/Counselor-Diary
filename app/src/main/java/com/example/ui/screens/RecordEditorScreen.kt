@@ -474,7 +474,7 @@ fun RecordEditorScreen(
               stepNumber = "4",
               title = "Kotak Rumusan & Analisis AI",
               subtitle = "Perkara, Persoalan & Huraian Intervensi automatik",
-              accentColor = AccentIndigo,
+              accentColor = MaterialTheme.colorScheme.tertiary,
             )
 
             FilledTonalButton(
@@ -493,15 +493,15 @@ fun RecordEditorScreen(
               shape = RoundedCornerShape(14.dp),
               colors =
                 ButtonDefaults.filledTonalButtonColors(
-                  containerColor = AccentIndigo.copy(alpha = 0.14f),
-                  contentColor = AccentIndigo,
+                  containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                  contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
                 ),
             ) {
               if (aiSummaryState is AiSummaryState.Loading) {
                 CircularProgressIndicator(
                   modifier = Modifier.size(18.dp),
                   strokeWidth = 2.dp,
-                  color = AccentIndigo,
+                  color = MaterialTheme.colorScheme.onTertiaryContainer,
                 )
                 Spacer(modifier = Modifier.width(10.dp))
                 Text("AI sedang menganalisis catatan...", fontWeight = FontWeight.Bold)
@@ -520,7 +520,7 @@ fun RecordEditorScreen(
               ) {
                 Text(
                   text = aiSummaryState.message,
-                  color = MaterialTheme.colorScheme.error,
+                  color = MaterialTheme.colorScheme.onErrorContainer,
                   style = MaterialTheme.typography.bodySmall,
                   modifier = Modifier.padding(10.dp),
                 )

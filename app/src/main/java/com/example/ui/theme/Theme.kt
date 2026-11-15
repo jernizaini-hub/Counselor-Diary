@@ -48,8 +48,10 @@ private val DarkColorScheme =
     onSecondary = DarkOnTerracotta,
     secondaryContainer = TerracottaOnContainer,
     onSecondaryContainer = TerracottaContainer,
-    tertiary = SlateContainer,
+    tertiary = DarkTertiaryIndigo,
     onTertiary = SlateOnContainer,
+    tertiaryContainer = DarkTertiaryContainer,
+    onTertiaryContainer = SlateContainer,
     background = DarkForestBackground,
     onBackground = DarkInk,
     surface = DarkForestSurface,
@@ -61,6 +63,9 @@ private val DarkColorScheme =
     surfaceContainerHigh = DarkForestSurfaceHigh,
     outline = WarmOutline,
     outlineVariant = DarkForestSurfaceHigh,
+    error = DarkErrorRed,
+    errorContainer = DarkErrorContainer,
+    onErrorContainer = ErrorContainerLight,
   )
 
 val AppShapes =

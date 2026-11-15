@@ -5,6 +5,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -34,10 +35,12 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -50,6 +53,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.credentials.CredentialManager
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
@@ -64,6 +68,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.auth.GoogleAuthHelper
+import com.example.crypto.AndroidVaultKeyCache
 import com.example.data.ai.CounselorAiService
 import com.example.data.firebase.configureAppCheck
 import com.example.data.repository.CounselorRepository
@@ -84,6 +89,7 @@ import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.auth
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 
@@ -164,6 +170,7 @@ private fun AuthenticatedCounselorApp(
               aiService = CounselorAiService(),
               currentUserId = currentUserId,
               userEmail = counselorEmail,
+              vaultKeyCache = AndroidVaultKeyCache(app),
             )
           }
         },
@@ -180,14 +187,33 @@ private fun AuthenticatedCounselorApp(
 
   when (val state = vaultState) {
     VaultState.Loading -> {
-      Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+      var slowConnectionHint by remember { mutableStateOf(false) }
+      LaunchedEffect(Unit) {
+        delay(4_000L)
+        slowConnectionHint = true
+      }
+      Box(modifier = Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+        Column(
+          horizontalAlignment = Alignment.CenterHorizontally,
+          verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
           CircularProgressIndicator()
-          Spacer(modifier = Modifier.height(12.dp))
           Text(
             text = "Menyediakan ruang kerja tersulit E2EE...",
-            style = MaterialTheme.typography.bodyMedium,
+            style = MaterialTheme.typography.titleMedium,
+            textAlign = TextAlign.Center,
           )
+          if (slowConnectionHint) {
+            Text(
+              text = "Sedang menyegerak konfigurasi akaun daripada awan. Sila tunggu sebentar...",
+              style = MaterialTheme.typography.bodySmall,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              textAlign = TextAlign.Center,
+            )
+            OutlinedButton(onClick = { performSignOut() }) {
+              Text("Log Keluar / Tukar Akaun")
+            }
+          }
         }
       }
     }
@@ -207,16 +233,34 @@ private fun AuthenticatedCounselorApp(
         modifier = Modifier.fillMaxSize().padding(24.dp),
         contentAlignment = Alignment.Center,
       ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(
+          horizontalAlignment = Alignment.CenterHorizontally,
+          verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
           Text(
-            text = "Ralat Sambungan Penyulitan",
+            text = "Ralat Sambungan Ruang Kerja",
             style = MaterialTheme.typography.titleLarge,
             color = MaterialTheme.colorScheme.error,
+            textAlign = TextAlign.Center,
           )
-          Spacer(modifier = Modifier.height(8.dp))
-          Text(text = state.message, style = MaterialTheme.typography.bodyMedium)
-          Spacer(modifier = Modifier.height(16.dp))
-          Button(onClick = { performSignOut() }) { Text("Log Keluar & Cuba Semula") }
+          Text(
+            text = state.message,
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center,
+          )
+          Spacer(modifier = Modifier.height(6.dp))
+          Button(
+            onClick = { viewModel.retryVaultSetup() },
+            modifier = Modifier.fillMaxWidth(0.75f).testTag("retry_vault_button"),
+          ) {
+            Text("Cuba Semula")
+          }
+          OutlinedButton(
+            onClick = { performSignOut() },
+            modifier = Modifier.fillMaxWidth(0.75f),
+          ) {
+            Text("Log Keluar & Tukar Akaun")
+          }
         }
       }
     }

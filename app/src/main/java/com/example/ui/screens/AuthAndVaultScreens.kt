@@ -91,18 +91,20 @@ fun AuthScreen(
   val credentialManager = remember(context) { CredentialManager.create(context) }
   var isLoading by remember { mutableStateOf(false) }
   var errorMessage by remember { mutableStateOf<String?>(null) }
+  var autoSignInJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
 
   val primaryGlow = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
   val secondaryGlow = MaterialTheme.colorScheme.secondary.copy(alpha = 0.12f)
 
   LaunchedEffect(Unit) {
-    GoogleAuthHelper.attemptAutoSignIn(
-      context = context,
-      credentialManager = credentialManager,
-      onAuthSuccess = onAuthSuccess,
-      onUnauthenticated = {},
-      scope = scope,
-    )
+    autoSignInJob =
+      GoogleAuthHelper.attemptAutoSignIn(
+        context = context,
+        credentialManager = credentialManager,
+        onAuthSuccess = onAuthSuccess,
+        onUnauthenticated = {},
+        scope = scope,
+      )
   }
 
   Box(
@@ -268,6 +270,8 @@ fun AuthScreen(
 
           Button(
             onClick = {
+              autoSignInJob?.cancel()
+              autoSignInJob = null
               isLoading = true
               errorMessage = null
               GoogleAuthHelper.onGoogleSignInClicked(

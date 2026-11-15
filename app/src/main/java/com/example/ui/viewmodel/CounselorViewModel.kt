@@ -4,6 +4,8 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.crypto.E2eeCryptoManager
+import com.example.crypto.NoOpVaultKeyCache
+import com.example.crypto.VaultKeyCache
 import com.example.data.ai.CounselorAiService
 import com.example.data.repository.CounselorRepository
 import com.example.model.ActivityCategory
@@ -12,6 +14,8 @@ import com.example.model.CounselingRecord
 import com.example.model.EncryptedCounselingRecordDto
 import com.example.model.VaultConfigDto
 import com.google.firebase.firestore.FirebaseFirestoreException
+import com.google.firebase.firestore.Source
+import java.security.GeneralSecurityException
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -19,6 +23,10 @@ import java.util.Locale
 import javax.crypto.SecretKey
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -26,38 +34,51 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import org.json.JSONArray
 import org.json.JSONObject
 
 sealed interface VaultState {
   data object Loading : VaultState
+
   data class LegacyPinMigration(val config: VaultConfigDto) : VaultState
+
   data class Unlocked(
     val config: VaultConfigDto,
     val masterKey: SecretKey,
   ) : VaultState
+
   data class Error(val message: String) : VaultState
 }
 
 sealed interface RecordsUiState {
   data object Loading : RecordsUiState
+
   data class Success(val records: List<CounselingRecord>) : RecordsUiState
+
   data class Error(val message: String) : RecordsUiState
 }
 
 sealed interface AiSummaryState {
   data object Idle : AiSummaryState
+
   data object Loading : AiSummaryState
+
   data class Success(val result: AiSummaryResult) : AiSummaryState
+
   data class Error(val message: String) : AiSummaryState
 }
 
 sealed interface CloudSyncState {
   data object Syncing : CloudSyncState
+
   data class Synced(val timestampMillis: Long, val recordCount: Int) : CloudSyncState
+
   data class Error(val message: String) : CloudSyncState
 }
 
@@ -87,13 +108,16 @@ class CounselorViewModel(
   private val aiService: CounselorAiService,
   private val currentUserId: String,
   private val userEmail: String,
+  private val vaultKeyCache: VaultKeyCache = NoOpVaultKeyCache,
 ) : ViewModel() {
 
   private val unlockedKeyFlow = MutableStateFlow<SecretKey?>(null)
+  private val localVaultConfigFlow = MutableStateFlow<VaultConfigDto?>(null)
   private val legacyMigrationConfigFlow = MutableStateFlow<VaultConfigDto?>(null)
   private val vaultActionErrorFlow = MutableStateFlow<String?>(null)
   private val vaultBusyFlow = MutableStateFlow(false)
   private val autoInitErrorFlow = MutableStateFlow<String?>(null)
+  private var vaultInitJob: Job? = null
 
   val vaultActionError: StateFlow<String?> = vaultActionErrorFlow.asStateFlow()
   val vaultBusy: StateFlow<Boolean> = vaultBusyFlow.asStateFlow()
@@ -112,29 +136,32 @@ class CounselorViewModel(
         Log.w(TAG, "Error observing vault config", rootError)
         emit(Result.failure(rootError))
       }
+      .shareIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS),
+        replay = 1,
+      )
 
   val vaultState: StateFlow<VaultState> =
     combine(
-        rawVaultFlow,
+        rawVaultFlow.onStart { emit(Result.success(null)) },
+        localVaultConfigFlow,
         unlockedKeyFlow,
         legacyMigrationConfigFlow,
         autoInitErrorFlow,
-      ) { configResult, masterKey, legacyConfig, initError ->
+      ) { configResult, localConfig, masterKey, legacyConfig, initError ->
+        val effectiveConfig = configResult.getOrNull() ?: localConfig
         when {
+          masterKey != null && effectiveConfig != null ->
+            VaultState.Unlocked(effectiveConfig, masterKey)
+          legacyConfig != null -> VaultState.LegacyPinMigration(legacyConfig)
           initError != null -> VaultState.Error(initError)
-          configResult.isFailure ->
+          configResult.isFailure && masterKey == null && localConfig == null ->
             VaultState.Error(
               configResult.exceptionOrNull()?.message
                 ?: "Gagal memuatkan konfigurasi penyulitan."
             )
-          else -> {
-            val config = configResult.getOrNull()
-            when {
-              masterKey != null && config != null -> VaultState.Unlocked(config, masterKey)
-              legacyConfig != null -> VaultState.LegacyPinMigration(legacyConfig)
-              else -> VaultState.Loading
-            }
-          }
+          else -> VaultState.Loading
         }
       }
       .stateIn(
@@ -217,12 +244,7 @@ class CounselorViewModel(
   val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
 
   init {
-    viewModelScope.launch {
-      rawVaultFlow.collect { result ->
-        if (result.isFailure || unlockedKeyFlow.value != null || vaultBusyFlow.value) return@collect
-        ensureAutoUnlocked(result.getOrNull())
-      }
-    }
+    initializeVaultSession()
     viewModelScope.launch {
       recordsState.collect { state ->
         when (state) {
@@ -264,92 +286,156 @@ class CounselorViewModel(
     _aiSummaryState.value = AiSummaryState.Idle
   }
 
-  // --- Automatic Seamless E2EE Key Provisioning (No 2FA Friction) ---
+  fun retryVaultSetup() {
+    initializeVaultSession()
+  }
+
+  // --- Fast Automatic Seamless E2EE Key Provisioning ---
 
   private fun autoVaultSecret(uid: String): String = "dk-e2ee-auto:$uid"
 
-  private suspend fun ensureAutoUnlocked(existingConfig: VaultConfigDto?) {
-    vaultBusyFlow.value = true
-    autoInitErrorFlow.value = null
-    try {
-      val secret = autoVaultSecret(currentUserId)
-      if (existingConfig == null) {
-        val payload =
-          withContext(Dispatchers.Default) {
-            val salt = E2eeCryptoManager.generateSaltBase64()
-            val kek = E2eeCryptoManager.deriveKeyFromPin(secret, salt)
-            val pinHash = E2eeCryptoManager.hashPinVerifier(secret, salt)
-            val masterKey = E2eeCryptoManager.generateMasterKey()
-            val wrappedMaster = E2eeCryptoManager.wrapSecretKey(masterKey, kek)
-            val config =
-              VaultConfigDto(
-                userId = currentUserId,
-                pinHash = pinHash,
-                kdfSalt = salt,
-                wrappedMasterKey = wrappedMaster.ciphertextBase64,
-                wrappedMasterKeyIv = wrappedMaster.ivBase64,
-                totpEnabled = false,
-              )
-            AutoSetupPayload(config, masterKey)
-          }
-        repository.saveVaultConfig(payload.config, isNew = true)
-        unlockedKeyFlow.value = payload.masterKey
-        legacyMigrationConfigFlow.value = null
-      } else {
-        val autoMatched =
-          withContext(Dispatchers.Default) {
-            E2eeCryptoManager.verifyPin(secret, existingConfig.kdfSalt, existingConfig.pinHash)
-          }
-        if (autoMatched) {
-          val masterKey =
-            withContext(Dispatchers.Default) {
-              val kek = E2eeCryptoManager.deriveKeyFromPin(secret, existingConfig.kdfSalt)
-              E2eeCryptoManager.unwrapSecretKey(
-                existingConfig.wrappedMasterKey,
-                existingConfig.wrappedMasterKeyIv,
-                kek,
-              )
-            }
-          unlockedKeyFlow.value = masterKey
-          legacyMigrationConfigFlow.value = null
-        } else {
-          val existingRecords = repository.getEncryptedRecords()
-          if (existingRecords.isEmpty()) {
-            val payload =
-              withContext(Dispatchers.Default) {
-                val salt = E2eeCryptoManager.generateSaltBase64()
-                val kek = E2eeCryptoManager.deriveKeyFromPin(secret, salt)
-                val pinHash = E2eeCryptoManager.hashPinVerifier(secret, salt)
-                val masterKey = E2eeCryptoManager.generateMasterKey()
-                val wrappedMaster = E2eeCryptoManager.wrapSecretKey(masterKey, kek)
-                val updated =
-                  existingConfig.copy(
-                    pinHash = pinHash,
-                    kdfSalt = salt,
-                    wrappedMasterKey = wrappedMaster.ciphertextBase64,
-                    wrappedMasterKeyIv = wrappedMaster.ivBase64,
-                    totpEnabled = false,
-                    wrappedTotpSecret = null,
-                    wrappedTotpIv = null,
-                    recoveryCodeHash = null,
-                  )
-                AutoSetupPayload(updated, masterKey)
-              }
-            repository.saveVaultConfig(payload.config, isNew = false)
-            unlockedKeyFlow.value = payload.masterKey
+  private fun initializeVaultSession() {
+    vaultInitJob?.cancel()
+    vaultInitJob =
+      viewModelScope.launch {
+        vaultBusyFlow.value = true
+        autoInitErrorFlow.value = null
+        try {
+          // 1. Instant local Keystore cache check (< 10ms, zero PBKDF2, zero network)
+          val localCached = withContext(Dispatchers.IO) { vaultKeyCache.load(currentUserId) }
+          if (localCached != null) {
+            localVaultConfigFlow.value = localCached.config
+            unlockedKeyFlow.value = localCached.masterKey
             legacyMigrationConfigFlow.value = null
-          } else {
-            legacyMigrationConfigFlow.value = existingConfig
+            return@launch
           }
+
+          // 2. Fast Firestore offline cache check (~5ms)
+          val cachedFirestoreConfig =
+            try {
+              repository.getVaultConfig(Source.CACHE)
+            } catch (_: Exception) {
+              null
+            }
+          if (cachedFirestoreConfig != null) {
+            val cachedKey = tryUnwrapWithAutoSecret(cachedFirestoreConfig)
+            if (cachedKey != null) {
+              persistLocalAndUnlock(cachedFirestoreConfig, cachedKey)
+              return@launch
+            }
+          }
+
+          // 3. Server check with bounded timeout so UI never hangs indefinitely
+          val serverConfig =
+            withTimeout(FIRESTORE_UNLOCK_TIMEOUT_MS) {
+              repository.getVaultConfig(Source.SERVER)
+            }
+
+          if (serverConfig == null) {
+            // Brand new user: generate E2EE key locally and unlock immediately; sync to Firestore in background
+            val payload = generateAutoSetupPayload(existing = null)
+            persistLocalAndUnlock(payload.config, payload.masterKey)
+            persistVaultConfigInBackground(payload.config, isNew = true)
+          } else {
+            val autoKey = tryUnwrapWithAutoSecret(serverConfig)
+            if (autoKey != null) {
+              persistLocalAndUnlock(serverConfig, autoKey)
+            } else {
+              val existingRecords =
+                withTimeout(FIRESTORE_UNLOCK_TIMEOUT_MS) { repository.getEncryptedRecords() }
+              if (existingRecords.isEmpty()) {
+                val payload = generateAutoSetupPayload(existing = serverConfig)
+                persistLocalAndUnlock(payload.config, payload.masterKey)
+                persistVaultConfigInBackground(payload.config, isNew = false)
+              } else {
+                legacyMigrationConfigFlow.value = serverConfig
+              }
+            }
+          }
+        } catch (e: CancellationException) {
+          throw e
+        } catch (e: TimeoutCancellationException) {
+          Log.w(TAG, "Firestore vault fetch timed out", e)
+          autoInitErrorFlow.value =
+            "Sambungan ke pelayan mengambil masa terlalu lama. Sila semak internet anda dan tekan Cuba Semula."
+        } catch (e: Exception) {
+          Log.e(TAG, "Auto E2EE vault setup/unlock failed", e)
+          autoInitErrorFlow.value =
+            e.localizedMessage ?: "Gagal menyediakan kunci penyulitan E2EE."
+        } finally {
+          vaultBusyFlow.value = false
         }
       }
-    } catch (e: CancellationException) {
-      throw e
-    } catch (e: Exception) {
-      Log.e(TAG, "Auto E2EE vault setup/unlock failed", e)
-      autoInitErrorFlow.value = e.localizedMessage ?: "Gagal menyediakan kunci penyulitan E2EE."
-    } finally {
-      vaultBusyFlow.value = false
+  }
+
+  private suspend fun tryUnwrapWithAutoSecret(config: VaultConfigDto): SecretKey? =
+    withContext(Dispatchers.Default) {
+      try {
+        // AES-GCM unwrapping cryptographically authenticates the KEK in a single PBKDF2 pass
+        val kek = E2eeCryptoManager.deriveKeyFromPin(autoVaultSecret(currentUserId), config.kdfSalt)
+        E2eeCryptoManager.unwrapSecretKey(
+          config.wrappedMasterKey,
+          config.wrappedMasterKeyIv,
+          kek,
+        )
+      } catch (_: GeneralSecurityException) {
+        null
+      } catch (_: IllegalArgumentException) {
+        null
+      }
+    }
+
+  private suspend fun generateAutoSetupPayload(existing: VaultConfigDto?): AutoSetupPayload =
+    coroutineScope {
+      val secret = autoVaultSecret(currentUserId)
+      val salt = E2eeCryptoManager.generateSaltBase64()
+      val kekDeferred = async(Dispatchers.Default) { E2eeCryptoManager.deriveKeyFromPin(secret, salt) }
+      val hashDeferred = async(Dispatchers.Default) { E2eeCryptoManager.hashPinVerifier(secret, salt) }
+      val masterKey = E2eeCryptoManager.generateMasterKey()
+      val kek = kekDeferred.await()
+      val pinHash = hashDeferred.await()
+      val wrappedMaster = E2eeCryptoManager.wrapSecretKey(masterKey, kek)
+      val config =
+        if (existing == null) {
+          VaultConfigDto(
+            userId = currentUserId,
+            pinHash = pinHash,
+            kdfSalt = salt,
+            wrappedMasterKey = wrappedMaster.ciphertextBase64,
+            wrappedMasterKeyIv = wrappedMaster.ivBase64,
+            totpEnabled = false,
+          )
+        } else {
+          existing.copy(
+            pinHash = pinHash,
+            kdfSalt = salt,
+            wrappedMasterKey = wrappedMaster.ciphertextBase64,
+            wrappedMasterKeyIv = wrappedMaster.ivBase64,
+            totpEnabled = false,
+            wrappedTotpSecret = null,
+            wrappedTotpIv = null,
+            recoveryCodeHash = null,
+          )
+        }
+      AutoSetupPayload(config, masterKey)
+    }
+
+  private suspend fun persistLocalAndUnlock(config: VaultConfigDto, masterKey: SecretKey) {
+    withContext(Dispatchers.IO) { vaultKeyCache.save(currentUserId, config, masterKey) }
+    localVaultConfigFlow.value = config
+    unlockedKeyFlow.value = masterKey
+    legacyMigrationConfigFlow.value = null
+  }
+
+  private fun persistVaultConfigInBackground(config: VaultConfigDto, isNew: Boolean) {
+    viewModelScope.launch {
+      try {
+        repository.saveVaultConfig(config, isNew = isNew)
+      } catch (e: CancellationException) {
+        throw e
+      } catch (e: Exception) {
+        Log.w(TAG, "Background vaultConfig cloud sync deferred/failed", e)
+      }
     }
   }
 
@@ -364,20 +450,23 @@ class CounselorViewModel(
       try {
         val migrated =
           withContext(Dispatchers.Default) {
-            if (!E2eeCryptoManager.verifyPin(oldPin, config.kdfSalt, config.pinHash)) {
-              throw IllegalArgumentException("PIN lama tidak tepat.")
-            }
             val oldKek = E2eeCryptoManager.deriveKeyFromPin(oldPin, config.kdfSalt)
             val masterKey =
-              E2eeCryptoManager.unwrapSecretKey(
-                config.wrappedMasterKey,
-                config.wrappedMasterKeyIv,
-                oldKek,
-              )
+              try {
+                E2eeCryptoManager.unwrapSecretKey(
+                  config.wrappedMasterKey,
+                  config.wrappedMasterKeyIv,
+                  oldKek,
+                )
+              } catch (_: GeneralSecurityException) {
+                throw IllegalArgumentException("PIN lama tidak tepat.")
+              }
             val autoSecret = autoVaultSecret(currentUserId)
             val newSalt = E2eeCryptoManager.generateSaltBase64()
-            val newKek = E2eeCryptoManager.deriveKeyFromPin(autoSecret, newSalt)
-            val newPinHash = E2eeCryptoManager.hashPinVerifier(autoSecret, newSalt)
+            val newKekDeferred = async { E2eeCryptoManager.deriveKeyFromPin(autoSecret, newSalt) }
+            val newHashDeferred = async { E2eeCryptoManager.hashPinVerifier(autoSecret, newSalt) }
+            val newKek = newKekDeferred.await()
+            val newPinHash = newHashDeferred.await()
             val newWrapped = E2eeCryptoManager.wrapSecretKey(masterKey, newKek)
             val updated =
               config.copy(
@@ -392,9 +481,8 @@ class CounselorViewModel(
               )
             AutoSetupPayload(updated, masterKey)
           }
-        repository.saveVaultConfig(migrated.config, isNew = false)
-        unlockedKeyFlow.value = migrated.masterKey
-        legacyMigrationConfigFlow.value = null
+        persistLocalAndUnlock(migrated.config, migrated.masterKey)
+        persistVaultConfigInBackground(migrated.config, isNew = false)
       } catch (e: CancellationException) {
         throw e
       } catch (e: Exception) {
@@ -406,7 +494,10 @@ class CounselorViewModel(
   }
 
   fun clearSessionKey() {
+    vaultInitJob?.cancel()
+    vaultKeyCache.clear(currentUserId)
     unlockedKeyFlow.value = null
+    localVaultConfigFlow.value = null
     legacyMigrationConfigFlow.value = null
     vaultActionErrorFlow.value = null
     autoInitErrorFlow.value = null
@@ -579,7 +670,6 @@ class CounselorViewModel(
     val aiCount = filtered.count { it.hasAiSummary }
     val totalMins = filtered.sumOf { it.durationMinutes }
 
-    // 7-day trend ending today
     val dayFmt = SimpleDateFormat("EEE", Locale.forLanguageTag("ms-MY"))
     val keyFmt = SimpleDateFormat("yyyyMMdd", Locale.US)
     val byDay = filtered.groupBy { keyFmt.format(Date(it.sessionDateMillis)) }
@@ -612,5 +702,6 @@ class CounselorViewModel(
   private companion object {
     const val TAG = "CounselorVM"
     const val STOP_TIMEOUT_MILLIS = 5000L
+    const val FIRESTORE_UNLOCK_TIMEOUT_MS = 10_000L
   }
 }

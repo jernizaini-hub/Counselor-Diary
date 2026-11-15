@@ -15,6 +15,8 @@ import com.google.firebase.auth.auth
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestoreException
+import com.google.firebase.firestore.Source
 import com.google.firebase.firestore.snapshots
 import javax.crypto.SecretKey
 import kotlinx.coroutines.CancellationException
@@ -75,11 +77,11 @@ class CounselorRepository(
     )
   }
 
-  suspend fun getVaultConfig(): VaultConfigDto? {
+  suspend fun getVaultConfig(source: Source = Source.DEFAULT): VaultConfigDto? {
     val uid = requireUserId()
     val docRef = db.collection("users").document(uid).collection("security").document(VAULT_DOC_ID)
     return try {
-      val snapshot = docRef.get().await()
+      val snapshot = docRef.get(source).await()
       if (snapshot.exists()) {
         snapshot.toObject(
           VaultConfigDto::class.java,
@@ -89,6 +91,12 @@ class CounselorRepository(
         null
       }
     } catch (e: CancellationException) {
+      throw e
+    } catch (e: FirebaseFirestoreException) {
+      if (source == Source.CACHE && e.code == FirebaseFirestoreException.Code.UNAVAILABLE) {
+        return null
+      }
+      handleFirestoreError(e, OperationType.GET, docRef.path)
       throw e
     } catch (e: Exception) {
       handleFirestoreError(e, OperationType.GET, docRef.path)
