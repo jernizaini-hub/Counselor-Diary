@@ -36,15 +36,27 @@ jobs:
         with:
           gradle-version: '9.3.1'
 
+      - name: Restore cached debug keystore (fallback)
+        uses: actions/cache@v4
+        with:
+          path: debug.keystore
+          key: debug-keystore-stable-v1
+
       - name: Prepare keystore and env
         env:
           GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+          DEBUG_KEYSTORE_BASE64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
         run: |
-          if [ -f debug.keystore.base64 ]; then
+          if [ -n "$DEBUG_KEYSTORE_BASE64" ]; then
+            printf '%s' "$DEBUG_KEYSTORE_BASE64" | base64 -d > debug.keystore
+          elif [ -f debug.keystore.base64 ]; then
             base64 -d debug.keystore.base64 > debug.keystore
           elif [ ! -f debug.keystore ]; then
+            echo "::warning::debug.keystore.base64 tiada dalam eksport; menjana debug.keystore tetap baharu."
             keytool -genkeypair -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
           fi
+          echo "=== Cap jari SHA-1 / SHA-256 untuk Firebase Console ==="
+          keytool -list -v -keystore debug.keystore -storepass android -alias androiddebugkey | grep -E "SHA1|SHA256" || true
           if [ ! -f .env ] && [ ! -f .env.example ]; then
             touch .env
           fi

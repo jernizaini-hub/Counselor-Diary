@@ -41,6 +41,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -149,11 +150,20 @@ fun AppNavigation(auth: FirebaseAuth? = rememberFirebaseAuthOrNull()) {
     return
   }
 
-  val currentUser by auth.authStateFlow().collectAsStateWithLifecycle(initialValue = auth.currentUser)
+  var currentUser by remember(auth) { mutableStateOf(auth.currentUser) }
+
+  DisposableEffect(auth) {
+    val listener = FirebaseAuth.AuthStateListener { firebaseAuth ->
+      currentUser = firebaseAuth.currentUser
+    }
+    auth.addAuthStateListener(listener)
+    onDispose { auth.removeAuthStateListener(listener) }
+  }
+
   val user = currentUser
 
   if (user == null) {
-    AuthScreen(onAuthSuccess = {})
+    AuthScreen(onAuthSuccess = { currentUser = auth.currentUser })
   } else {
     key(user.uid) {
       AuthenticatedCounselorApp(

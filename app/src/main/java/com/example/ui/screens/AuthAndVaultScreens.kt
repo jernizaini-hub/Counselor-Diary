@@ -24,6 +24,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
@@ -90,7 +91,7 @@ fun AuthScreen(
   val scope = rememberCoroutineScope()
   val credentialManager = remember(context) { CredentialManager.create(context) }
   var isLoading by remember { mutableStateOf(false) }
-  var errorMessage by remember { mutableStateOf<String?>(null) }
+  var errorMessage by rememberSaveable { mutableStateOf<String?>(null) }
   var autoSignInJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
 
   val primaryGlow = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
@@ -259,12 +260,14 @@ fun AuthScreen(
               shape = RoundedCornerShape(12.dp),
               modifier = Modifier.fillMaxWidth().padding(bottom = 14.dp),
             ) {
-              Text(
-                text = errorMessage!!,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.padding(12.dp),
-              )
+              SelectionContainer {
+                Text(
+                  text = errorMessage!!,
+                  style = MaterialTheme.typography.bodySmall,
+                  color = MaterialTheme.colorScheme.onErrorContainer,
+                  modifier = Modifier.padding(12.dp),
+                )
+              }
             }
           }
 
@@ -286,7 +289,10 @@ fun AuthScreen(
                   errorMessage = msg
                 },
                 scope = scope,
-                onAuthCancelled = { isLoading = false },
+                onAuthCancelled = { hint ->
+                  isLoading = false
+                  errorMessage = hint
+                },
               )
             },
             enabled = !isLoading,
