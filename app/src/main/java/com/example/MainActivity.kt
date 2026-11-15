@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Book
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.Book
 import androidx.compose.material.icons.outlined.Security
@@ -84,6 +85,7 @@ import com.example.ui.viewmodel.CounselorViewModel
 import com.example.ui.viewmodel.RecordsUiState
 import com.example.ui.viewmodel.VaultState
 import com.google.firebase.Firebase
+import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.auth
@@ -126,7 +128,27 @@ internal fun FirebaseAuth.authStateFlow(): Flow<FirebaseUser?> = callbackFlow {
 }
 
 @Composable
-fun AppNavigation(auth: FirebaseAuth = Firebase.auth) {
+private fun rememberFirebaseAuthOrNull(): FirebaseAuth? {
+  val context = LocalContext.current
+  return remember(context) {
+    try {
+      if (FirebaseApp.getApps(context).isEmpty()) {
+        FirebaseApp.initializeApp(context)
+      }
+      if (FirebaseApp.getApps(context).isNotEmpty()) Firebase.auth else null
+    } catch (_: Exception) {
+      null
+    }
+  }
+}
+
+@Composable
+fun AppNavigation(auth: FirebaseAuth? = rememberFirebaseAuthOrNull()) {
+  if (auth == null) {
+    MissingFirebaseConfigScreen()
+    return
+  }
+
   val currentUser by auth.authStateFlow().collectAsStateWithLifecycle(initialValue = auth.currentUser)
   val user = currentUser
 
@@ -139,6 +161,61 @@ fun AppNavigation(auth: FirebaseAuth = Firebase.auth) {
         counselorName = user.displayName.orEmpty(),
         counselorEmail = user.email.orEmpty(),
       )
+    }
+  }
+}
+
+@Composable
+private fun MissingFirebaseConfigScreen() {
+  Box(
+    modifier = Modifier.fillMaxSize().padding(24.dp),
+    contentAlignment = Alignment.Center,
+  ) {
+    Column(
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+      Icon(
+        imageVector = Icons.Filled.WarningAmber,
+        contentDescription = null,
+        tint = MaterialTheme.colorScheme.error,
+        modifier = Modifier.height(48.dp),
+      )
+      Text(
+        text = "Konfigurasi Firebase Diperlukan",
+        style = MaterialTheme.typography.headlineSmall,
+        fontWeight = FontWeight.Bold,
+        textAlign = TextAlign.Center,
+      )
+      Text(
+        text =
+          "Binaan APK ini tidak mengandungi fail konfigurasi Firebase (google-services.json), biasanya apabila dibina melalui GitHub tanpa secret GOOGLE_SERVICES_JSON.",
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Center,
+      )
+      Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Column(
+          modifier = Modifier.padding(16.dp),
+          verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          Text(
+            text = "Cara Membaiki:",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+          )
+          Text(
+            text =
+              "1. Tambah secret bernama GOOGLE_SERVICES_JSON (isi fail app/google-services.json) dalam GitHub Repository Settings -> Secrets and variables -> Actions, kemudian bina semula APK.\n2. Atau jana/pasang binaan terus melalui menu Publish di AI Studio atau Android Studio.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
+        }
+      }
     }
   }
 }

@@ -20,6 +20,10 @@ fun configureAppCheck(context: Context, intent: Intent?) {
     if (FirebaseApp.getApps(context).isEmpty()) {
       FirebaseApp.initializeApp(context)
     }
+    if (FirebaseApp.getApps(context).isEmpty()) {
+      Log.w(TAG, "FirebaseApp is not initialized (missing google-services.json); skipping App Check.")
+      return
+    }
 
     if (BuildConfig.DEBUG) {
       val debugToken = intent?.getStringExtra(DEBUG_TOKEN_EXTRA)
