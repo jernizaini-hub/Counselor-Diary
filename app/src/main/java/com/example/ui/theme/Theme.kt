@@ -58,15 +58,16 @@ private val DarkColorScheme =
     onSurfaceVariant = DarkInkVariant,
     surfaceContainerLow = DarkForestSurface,
     surfaceContainer = DarkForestSurfaceContainer,
-    surfaceContainerHigh = DarkForestSurfaceContainer,
+    surfaceContainerHigh = DarkForestSurfaceHigh,
     outline = WarmOutline,
+    outlineVariant = DarkForestSurfaceHigh,
   )
 
 val AppShapes =
   Shapes(
-    small = RoundedCornerShape(10.dp),
-    medium = RoundedCornerShape(16.dp),
-    large = RoundedCornerShape(24.dp),
+    small = RoundedCornerShape(12.dp),
+    medium = RoundedCornerShape(18.dp),
+    large = RoundedCornerShape(26.dp),
   )
 
 @Composable

@@ -299,14 +299,21 @@ private fun UnlockedCounselorShell(
         ExtendedFloatingActionButton(
           onClick = { navigateEditor(null) },
           icon = { Icon(Icons.Filled.Add, contentDescription = null) },
-          text = { Text("Catatan Baharu") },
+          text = { Text("Catatan Baharu", fontWeight = FontWeight.Bold) },
+          containerColor = MaterialTheme.colorScheme.primary,
+          contentColor = MaterialTheme.colorScheme.onPrimary,
+          shape = RoundedCornerShape(18.dp),
           modifier = Modifier.testTag("new_record_fab"),
         )
       }
     },
     bottomBar = {
       if (isTopLevel && !useNavRail) {
-        NavigationBar(windowInsets = WindowInsets.navigationBars) {
+        NavigationBar(
+          windowInsets = WindowInsets.navigationBars,
+          containerColor = MaterialTheme.colorScheme.surface,
+          tonalElevation = 3.dp,
+        ) {
           navItems.forEach { (route, label, icons) ->
             val selected = currentRoute == route
             NavigationBarItem(
@@ -324,7 +331,12 @@ private fun UnlockedCounselorShell(
                   contentDescription = label,
                 )
               },
-              label = { Text(label) },
+              label = {
+                Text(
+                  text = label,
+                  fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                )
+              },
               modifier = Modifier.testTag("nav_$route"),
             )
           }

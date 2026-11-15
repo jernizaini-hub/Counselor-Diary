@@ -4,6 +4,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -42,6 +43,7 @@ import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -53,6 +55,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -64,6 +67,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -72,6 +76,11 @@ import androidx.compose.ui.unit.dp
 import com.example.export.ReportExporter
 import com.example.model.ActivityCategory
 import com.example.model.CounselingRecord
+import com.example.ui.components.SectionStepHeader
+import com.example.ui.components.rememberCategoryVisualMap
+import com.example.ui.theme.AccentCoral
+import com.example.ui.theme.AccentIndigo
+import com.example.ui.theme.AccentSky
 import com.example.ui.viewmodel.AiSummaryState
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -100,6 +109,7 @@ fun RecordEditorScreen(
   onBack: () -> Unit,
 ) {
   val context = LocalContext.current
+  val categoryVisuals = rememberCategoryVisualMap()
 
   var category by rememberSaveable {
     mutableStateOf(existingRecord?.category ?: initialCategory)
@@ -204,11 +214,22 @@ fun RecordEditorScreen(
   Scaffold(
     topBar = {
       TopAppBar(
+        colors =
+          TopAppBarDefaults.topAppBarColors(
+            containerColor = MaterialTheme.colorScheme.background
+          ),
         title = {
-          Text(
-            text = if (existingRecord == null) "Catatan Baharu" else "Butiran & Rumusan Rekod",
-            style = MaterialTheme.typography.titleLarge,
-          )
+          Column {
+            Text(
+              text = if (existingRecord == null) "Catatan Baharu" else "Butiran & Rumusan Rekod",
+              style = MaterialTheme.typography.titleLarge,
+            )
+            Text(
+              text = if (existingRecord == null) "Sesi / Aktiviti Baharu" else "Rekod Disulitkan E2EE",
+              style = MaterialTheme.typography.labelSmall,
+              color = MaterialTheme.colorScheme.primary,
+            )
+          }
         },
         navigationIcon = {
           IconButton(onClick = onBack, modifier = Modifier.testTag("editor_back_button")) {
@@ -241,44 +262,74 @@ fun RecordEditorScreen(
           Modifier.fillMaxWidth()
             .widthIn(max = 720.dp)
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
       ) {
         // 1. Kategori Sesi & Aktiviti
-        Text(
-          text = "Kategori Sesi / Aktiviti",
-          style = MaterialTheme.typography.titleSmall,
-        )
-        FlowRow(
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
-          verticalArrangement = Arrangement.spacedBy(6.dp),
+        Card(
+          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+          border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+          shape = RoundedCornerShape(22.dp),
+          modifier = Modifier.fillMaxWidth(),
         ) {
-          ActivityCategory.entries.forEach { cat ->
-            FilterChip(
-              selected = category == cat,
-              onClick = { category = cat },
-              label = { Text(cat.displayName) },
-              modifier = Modifier.testTag("editor_cat_${cat.name.lowercase()}"),
+          Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            SectionStepHeader(
+              stepNumber = "1",
+              title = "Kategori Sesi / Aktiviti",
+              subtitle = "Pilih jenis catatan kaunseling atau aktiviti harian",
+              accentColor = categoryVisuals[category]?.color ?: MaterialTheme.colorScheme.primary,
             )
+            FlowRow(
+              horizontalArrangement = Arrangement.spacedBy(8.dp),
+              verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+              ActivityCategory.entries.forEach { cat ->
+                val visual = categoryVisuals[cat]
+                val accent = visual?.color ?: MaterialTheme.colorScheme.primary
+                FilterChip(
+                  selected = category == cat,
+                  onClick = { category = cat },
+                  leadingIcon =
+                    visual?.let {
+                      {
+                        Icon(
+                          imageVector = it.icon,
+                          contentDescription = null,
+                          modifier = Modifier.size(16.dp),
+                          tint = if (category == cat) accent else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                      }
+                    },
+                  label = { Text(cat.displayName) },
+                  shape = RoundedCornerShape(50),
+                  colors =
+                    FilterChipDefaults.filterChipColors(
+                      selectedContainerColor = accent.copy(alpha = 0.14f),
+                      selectedLabelColor = accent,
+                    ),
+                  modifier = Modifier.testTag("editor_cat_${cat.name.lowercase()}"),
+                )
+              }
+            }
           }
         }
 
         // 2. Maklumat Klien, Kelas, Hari & Masa
         Card(
-          colors =
-            CardDefaults.cardColors(
-              containerColor = MaterialTheme.colorScheme.surfaceContainerLow
-            ),
-          shape = RoundedCornerShape(18.dp),
+          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+          border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+          shape = RoundedCornerShape(22.dp),
           modifier = Modifier.fillMaxWidth(),
         ) {
           Column(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
           ) {
-            Text(
-              text = "Maklumat Sesi & Klien",
-              style = MaterialTheme.typography.titleMedium,
+            SectionStepHeader(
+              stepNumber = "2",
+              title = "Maklumat Sesi & Klien",
+              subtitle = "Nama klien/peserta, kelas, hari & masa",
+              accentColor = MaterialTheme.colorScheme.primary,
             )
 
             OutlinedTextField(
@@ -292,6 +343,7 @@ fun RecordEditorScreen(
               },
               placeholder = { Text("cth. Nurul Aina binti Hassan") },
               singleLine = true,
+              shape = RoundedCornerShape(14.dp),
               modifier = Modifier.fillMaxWidth().testTag("client_name_input"),
             )
 
@@ -301,6 +353,7 @@ fun RecordEditorScreen(
               label = { Text("Kelas / Tingkatan / Lokasi") },
               placeholder = { Text("cth. 5 Sains 1 / Bilik Kaunseling") },
               singleLine = true,
+              shape = RoundedCornerShape(14.dp),
               modifier = Modifier.fillMaxWidth().testTag("class_name_input"),
             )
 
@@ -315,7 +368,7 @@ fun RecordEditorScreen(
             ) {
               OutlinedButton(
                 onClick = { showDatePicker = true },
-                shape = RoundedCornerShape(12.dp),
+                shape = RoundedCornerShape(14.dp),
                 modifier = Modifier.weight(1f).height(54.dp).testTag("date_picker_button"),
               ) {
                 Icon(Icons.Filled.CalendarMonth, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -328,6 +381,7 @@ fun RecordEditorScreen(
                 onValueChange = { dayName = it },
                 label = { Text("Hari") },
                 singleLine = true,
+                shape = RoundedCornerShape(14.dp),
                 modifier = Modifier.weight(0.75f).testTag("day_input"),
               )
             }
@@ -342,6 +396,7 @@ fun RecordEditorScreen(
                 label = { Text("Masa") },
                 placeholder = { Text("09:00 - 09:45") },
                 singleLine = true,
+                shape = RoundedCornerShape(14.dp),
                 modifier = Modifier.weight(1.2f).testTag("time_input"),
               )
               OutlinedTextField(
@@ -350,6 +405,7 @@ fun RecordEditorScreen(
                 label = { Text("Tempoh (min)") },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 singleLine = true,
+                shape = RoundedCornerShape(14.dp),
                 modifier = Modifier.weight(0.8f).testTag("duration_input"),
               )
             }
@@ -358,20 +414,20 @@ fun RecordEditorScreen(
 
         // 3. Transkrip Perbualan / Catatan Ringkas
         Card(
-          colors =
-            CardDefaults.cardColors(
-              containerColor = MaterialTheme.colorScheme.surfaceContainerLow
-            ),
-          shape = RoundedCornerShape(18.dp),
+          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+          border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+          shape = RoundedCornerShape(22.dp),
           modifier = Modifier.fillMaxWidth(),
         ) {
           Column(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
           ) {
-            Text(
-              text = "Transkrip Perbualan / Catatan Ringkas Kaunselor",
-              style = MaterialTheme.typography.titleMedium,
+            SectionStepHeader(
+              stepNumber = "3",
+              title = "Transkrip / Catatan Ringkas",
+              subtitle = "Catatan perbualan atau pemerhatian kaunselor",
+              accentColor = AccentCoral,
             )
             OutlinedTextField(
               value = notes,
@@ -383,43 +439,43 @@ fun RecordEditorScreen(
               },
               minLines = 5,
               maxLines = 12,
+              shape = RoundedCornerShape(14.dp),
               modifier = Modifier.fillMaxWidth().testTag("notes_input"),
             )
           }
         }
 
         // 4. Kotak Rumusan & Janaan AI (Perkara, Persoalan, Huraian Intervensi)
+        val aiBorderBrush =
+          Brush.linearGradient(
+            listOf(MaterialTheme.colorScheme.primary, AccentIndigo, AccentCoral)
+          )
         Card(
-          colors =
-            CardDefaults.cardColors(
-              containerColor = MaterialTheme.colorScheme.surfaceContainer
-            ),
-          border = BorderStroke(1.2.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)),
-          shape = RoundedCornerShape(20.dp),
+          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+          border = BorderStroke(1.5.dp, aiBorderBrush),
+          elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+          shape = RoundedCornerShape(24.dp),
           modifier = Modifier.fillMaxWidth().testTag("ai_summary_box"),
         ) {
           Column(
-            modifier = Modifier.padding(16.dp),
+            modifier =
+              Modifier.background(
+                  Brush.verticalGradient(
+                    listOf(
+                      MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.28f),
+                      MaterialTheme.colorScheme.surface,
+                    )
+                  )
+                )
+                .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
           ) {
-            Row(
-              modifier = Modifier.fillMaxWidth(),
-              horizontalArrangement = Arrangement.SpaceBetween,
-              verticalAlignment = Alignment.CenterVertically,
-            ) {
-              Column(modifier = Modifier.weight(1f)) {
-                Text(
-                  text = "Kotak Rumusan & Analisis AI",
-                  style = MaterialTheme.typography.titleMedium,
-                  color = MaterialTheme.colorScheme.primary,
-                )
-                Text(
-                  text = "Analisis automatik Perkara, Persoalan & Huraian Intervensi",
-                  style = MaterialTheme.typography.bodySmall,
-                  color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-              }
-            }
+            SectionStepHeader(
+              stepNumber = "4",
+              title = "Kotak Rumusan & Analisis AI",
+              subtitle = "Perkara, Persoalan & Huraian Intervensi automatik",
+              accentColor = AccentIndigo,
+            )
 
             FilledTonalButton(
               onClick = {
@@ -433,27 +489,33 @@ fun RecordEditorScreen(
                 )
               },
               enabled = aiSummaryState !is AiSummaryState.Loading,
-              modifier = Modifier.fillMaxWidth().height(48.dp).testTag("generate_ai_button"),
-              shape = RoundedCornerShape(12.dp),
+              modifier = Modifier.fillMaxWidth().height(50.dp).testTag("generate_ai_button"),
+              shape = RoundedCornerShape(14.dp),
+              colors =
+                ButtonDefaults.filledTonalButtonColors(
+                  containerColor = AccentIndigo.copy(alpha = 0.14f),
+                  contentColor = AccentIndigo,
+                ),
             ) {
               if (aiSummaryState is AiSummaryState.Loading) {
                 CircularProgressIndicator(
                   modifier = Modifier.size(18.dp),
                   strokeWidth = 2.dp,
+                  color = AccentIndigo,
                 )
                 Spacer(modifier = Modifier.width(10.dp))
-                Text("AI sedang menganalisis catatan...")
+                Text("AI sedang menganalisis catatan...", fontWeight = FontWeight.Bold)
               } else {
                 Icon(Icons.Filled.AutoAwesome, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Jana Rumusan AI daripada Catatan")
+                Text("Jana Rumusan AI daripada Catatan", fontWeight = FontWeight.Bold)
               }
             }
 
             if (aiSummaryState is AiSummaryState.Error) {
               Surface(
                 color = MaterialTheme.colorScheme.errorContainer,
-                shape = RoundedCornerShape(10.dp),
+                shape = RoundedCornerShape(12.dp),
                 modifier = Modifier.fillMaxWidth(),
               ) {
                 Text(
@@ -471,6 +533,7 @@ fun RecordEditorScreen(
               label = { Text("1. Perkara (Isu / Tema Utama)") },
               minLines = 2,
               maxLines = 6,
+              shape = RoundedCornerShape(14.dp),
               modifier = Modifier.fillMaxWidth().testTag("summary_matter_input"),
             )
 
@@ -480,6 +543,7 @@ fun RecordEditorScreen(
               label = { Text("2. Persoalan") },
               minLines = 2,
               maxLines = 6,
+              shape = RoundedCornerShape(14.dp),
               modifier = Modifier.fillMaxWidth().testTag("summary_questions_input"),
             )
 
@@ -489,17 +553,25 @@ fun RecordEditorScreen(
               label = { Text("3. Huraian Intervensi") },
               minLines = 3,
               maxLines = 8,
+              shape = RoundedCornerShape(14.dp),
               modifier = Modifier.fillMaxWidth().testTag("summary_intervention_input"),
             )
           }
         }
 
         if (validationError != null) {
-          Text(
-            text = validationError!!,
-            color = MaterialTheme.colorScheme.error,
-            style = MaterialTheme.typography.bodySmall,
-          )
+          Surface(
+            color = MaterialTheme.colorScheme.errorContainer,
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.fillMaxWidth(),
+          ) {
+            Text(
+              text = validationError!!,
+              color = MaterialTheme.colorScheme.error,
+              style = MaterialTheme.typography.bodySmall,
+              modifier = Modifier.padding(12.dp),
+            )
+          }
         }
 
         // 5. Butang Simpan Rekod (E2EE + Sandaran Awan)
@@ -524,8 +596,8 @@ fun RecordEditorScreen(
             }
           },
           enabled = !isSaving,
-          modifier = Modifier.fillMaxWidth().height(52.dp).testTag("save_record_button"),
-          shape = RoundedCornerShape(14.dp),
+          modifier = Modifier.fillMaxWidth().height(54.dp).testTag("save_record_button"),
+          shape = RoundedCornerShape(16.dp),
         ) {
           if (isSaving) {
             CircularProgressIndicator(
@@ -544,16 +616,14 @@ fun RecordEditorScreen(
 
         // 6. Pilihan Cetak / Eksport Automatik PDF & Word (.docx)
         Card(
-          colors =
-            CardDefaults.cardColors(
-              containerColor = MaterialTheme.colorScheme.surfaceContainerLow
-            ),
-          shape = RoundedCornerShape(18.dp),
+          colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+          border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+          shape = RoundedCornerShape(22.dp),
           modifier = Modifier.fillMaxWidth(),
         ) {
           Column(
             modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
           ) {
             Text(
               text = "Cetak & Eksport Laporan Automatik",
@@ -566,31 +636,41 @@ fun RecordEditorScreen(
             ) {
               OutlinedButton(
                 onClick = { showExportMenuDialog = ExportTarget.PDF },
-                modifier = Modifier.weight(1f).height(48.dp).testTag("export_pdf_button"),
-                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, AccentCoral.copy(alpha = 0.45f)),
+                colors =
+                  ButtonDefaults.outlinedButtonColors(
+                    containerColor = AccentCoral.copy(alpha = 0.08f),
+                    contentColor = AccentCoral,
+                  ),
+                modifier = Modifier.weight(1f).height(50.dp).testTag("export_pdf_button"),
+                shape = RoundedCornerShape(14.dp),
               ) {
                 Icon(
                   Icons.Filled.PictureAsPdf,
                   contentDescription = null,
-                  tint = MaterialTheme.colorScheme.secondary,
                   modifier = Modifier.size(18.dp),
                 )
                 Spacer(modifier = Modifier.width(6.dp))
-                Text("PDF / Cetak")
+                Text("PDF / Cetak", fontWeight = FontWeight.Bold)
               }
               OutlinedButton(
                 onClick = { showExportMenuDialog = ExportTarget.WORD },
-                modifier = Modifier.weight(1f).height(48.dp).testTag("export_word_button"),
-                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, AccentSky.copy(alpha = 0.45f)),
+                colors =
+                  ButtonDefaults.outlinedButtonColors(
+                    containerColor = AccentSky.copy(alpha = 0.08f),
+                    contentColor = AccentSky,
+                  ),
+                modifier = Modifier.weight(1f).height(50.dp).testTag("export_word_button"),
+                shape = RoundedCornerShape(14.dp),
               ) {
                 Icon(
                   Icons.Filled.Description,
                   contentDescription = null,
-                  tint = MaterialTheme.colorScheme.tertiary,
                   modifier = Modifier.size(18.dp),
                 )
                 Spacer(modifier = Modifier.width(6.dp))
-                Text("Word (.docx)")
+                Text("Word (.docx)", fontWeight = FontWeight.Bold)
               }
             }
           }
