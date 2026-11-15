@@ -1,0 +1,6 @@
+{
+  "name": "Diari Kaunselor",
+  "description": "Aplikasi diari dan catatan kaunselor dengan janaan rumusan AI (perkara, persoalan, intervensi), eksport PDF dan Word, pengesahan dua faktor, penyulitan hujung ke hujung, sandaran awan automatik, serta papan pemuka statistik prestasi.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

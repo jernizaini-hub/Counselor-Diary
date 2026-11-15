@@ -1,0 +1,137 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global safety net: deny all access by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidCategory(cat) {
+      return cat in [
+        'KAUNSELING_INDIVIDU',
+        'KAUNSELING_KELOMPOK',
+        'PROGRAM',
+        'MESYUARAT',
+        'KELAS_GANTI',
+        'ZIARAH_CAKNA',
+        'KONSULTASI_IBUBAPA'
+      ];
+    }
+
+    function isValidVaultConfig(data) {
+      return data.userId is string && data.userId == request.auth.uid && data.userId.size() <= 128 &&
+             data.pinHash is string && data.pinHash.size() >= 16 && data.pinHash.size() <= 256 &&
+             data.kdfSalt is string && data.kdfSalt.size() >= 8 && data.kdfSalt.size() <= 128 &&
+             data.wrappedMasterKey is string && data.wrappedMasterKey.size() >= 16 && data.wrappedMasterKey.size() <= 512 &&
+             data.wrappedMasterKeyIv is string && data.wrappedMasterKeyIv.size() >= 8 && data.wrappedMasterKeyIv.size() <= 64 &&
+             data.totpEnabled is bool &&
+             (!('wrappedTotpSecret' in data) || (data.wrappedTotpSecret is string && data.wrappedTotpSecret.size() <= 512)) &&
+             (!('wrappedTotpIv' in data) || (data.wrappedTotpIv is string && data.wrappedTotpIv.size() <= 64)) &&
+             (!('recoveryCodeHash' in data) || (data.recoveryCodeHash is string && data.recoveryCodeHash.size() <= 256)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidCounselingRecord(data) {
+      return data.userId is string && data.userId == request.auth.uid && data.userId.size() <= 128 &&
+             data.category is string && isValidCategory(data.category) &&
+             data.sessionDateMillis is int && data.sessionDateMillis >= 0 &&
+             data.dayName is string && data.dayName.size() >= 1 && data.dayName.size() <= 30 &&
+             data.timeRange is string && data.timeRange.size() >= 1 && data.timeRange.size() <= 60 &&
+             data.durationMinutes is int && data.durationMinutes >= 0 && data.durationMinutes <= 1440 &&
+             data.hasAiSummary is bool &&
+             data.encryptionVersion is string && data.encryptionVersion.size() >= 1 && data.encryptionVersion.size() <= 32 &&
+             data.encryptedPayload is string && data.encryptedPayload.size() >= 16 && data.encryptedPayload.size() <= 100000 &&
+             data.payloadIv is string && data.payloadIv.size() >= 8 && data.payloadIv.size() <= 64 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    match /users/{userId}/security/{configId} {
+      allow get: if isOwner(userId) && isValidId(configId);
+      allow list: if isOwner(userId);
+
+      allow create: if isOwner(userId) &&
+                       isValidId(configId) &&
+                       incoming().keys().hasAll([
+                         'userId', 'pinHash', 'kdfSalt', 'wrappedMasterKey',
+                         'wrappedMasterKeyIv', 'totpEnabled', 'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'userId', 'pinHash', 'kdfSalt', 'wrappedMasterKey',
+                         'wrappedMasterKeyIv', 'totpEnabled', 'wrappedTotpSecret',
+                         'wrappedTotpIv', 'recoveryCodeHash', 'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidVaultConfig(incoming());
+
+      allow update: if isOwner(userId) &&
+                       isValidId(configId) &&
+                       isValidVaultConfig(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'pinHash', 'kdfSalt', 'wrappedMasterKey',
+                         'wrappedMasterKeyIv', 'totpEnabled', 'wrappedTotpSecret',
+                         'wrappedTotpIv', 'recoveryCodeHash', 'updatedAt'
+                       ]);
+
+      allow delete: if isOwner(userId) && isValidId(configId);
+    }
+
+    match /users/{userId}/records/{recordId} {
+      allow get: if isOwner(userId) && isValidId(recordId);
+      allow list: if isOwner(userId);
+
+      allow create: if isOwner(userId) &&
+                       isValidId(recordId) &&
+                       incoming().keys().hasAll([
+                         'userId', 'category', 'sessionDateMillis', 'dayName',
+                         'timeRange', 'durationMinutes', 'hasAiSummary',
+                         'encryptionVersion', 'encryptedPayload', 'payloadIv',
+                         'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'userId', 'category', 'sessionDateMillis', 'dayName',
+                         'timeRange', 'durationMinutes', 'hasAiSummary',
+                         'encryptionVersion', 'encryptedPayload', 'payloadIv',
+                         'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidCounselingRecord(incoming());
+
+      allow update: if isOwner(userId) &&
+                       isValidId(recordId) &&
+                       isValidCounselingRecord(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'category', 'sessionDateMillis', 'dayName',
+                         'timeRange', 'durationMinutes', 'hasAiSummary',
+                         'encryptionVersion', 'encryptedPayload', 'payloadIv',
+                         'updatedAt'
+                       ]);
+
+      allow delete: if isOwner(userId) && isValidId(recordId);
+    }
+  }
+}

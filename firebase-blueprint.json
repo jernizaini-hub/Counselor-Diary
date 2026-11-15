@@ -1,0 +1,161 @@
+{
+  "entities": {
+    "VaultConfig": {
+      "title": "VaultConfig",
+      "description": "End-to-end encrypted key wrapping and 2FA security metadata for a counselor.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Authenticated Firebase UID of the counselor."
+        },
+        "pinHash": {
+          "type": "string",
+          "description": "PBKDF2-HMAC-SHA256 hash of the counselor 6-digit security PIN."
+        },
+        "kdfSalt": {
+          "type": "string",
+          "description": "Base64-encoded 16-byte salt used for key derivation."
+        },
+        "wrappedMasterKey": {
+          "type": "string",
+          "description": "AES-256-GCM wrapped master E2EE key."
+        },
+        "wrappedMasterKeyIv": {
+          "type": "string",
+          "description": "Base64 IV for wrapped master E2EE key."
+        },
+        "totpEnabled": {
+          "type": "boolean",
+          "description": "Whether RFC 6238 TOTP second-factor verification is enabled."
+        },
+        "wrappedTotpSecret": {
+          "type": "string",
+          "description": "Optional AES-256-GCM wrapped TOTP shared secret."
+        },
+        "wrappedTotpIv": {
+          "type": "string",
+          "description": "Optional Base64 IV for wrapped TOTP secret."
+        },
+        "recoveryCodeHash": {
+          "type": "string",
+          "description": "Optional SHA-256 hash of the emergency recovery code."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when vault config was created (client writes FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when vault config was last updated (client writes FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "userId",
+        "pinHash",
+        "kdfSalt",
+        "wrappedMasterKey",
+        "wrappedMasterKeyIv",
+        "totpEnabled",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CounselingRecord": {
+      "title": "CounselingRecord",
+      "description": "End-to-end encrypted counseling session or counselor activity diary record.",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Authenticated Firebase UID of the owning counselor."
+        },
+        "category": {
+          "type": "string",
+          "enum": [
+            "KAUNSELING_INDIVIDU",
+            "KAUNSELING_KELOMPOK",
+            "PROGRAM",
+            "MESYUARAT",
+            "KELAS_GANTI",
+            "ZIARAH_CAKNA",
+            "KONSULTASI_IBUBAPA"
+          ],
+          "description": "Type of counseling session or counselor activity."
+        },
+        "sessionDateMillis": {
+          "type": "integer",
+          "description": "Epoch milliseconds of the session or activity date."
+        },
+        "dayName": {
+          "type": "string",
+          "description": "Day of the week in Malay (e.g., Isnin)."
+        },
+        "timeRange": {
+          "type": "string",
+          "description": "Session time range string (e.g., 09:00 - 10:00)."
+        },
+        "durationMinutes": {
+          "type": "integer",
+          "description": "Duration of the session or activity in minutes."
+        },
+        "hasAiSummary": {
+          "type": "boolean",
+          "description": "Whether the record contains an AI-generated or finalized summary."
+        },
+        "encryptionVersion": {
+          "type": "string",
+          "description": "Client-side E2EE cipher suite identifier (AES-256-GCM-v1)."
+        },
+        "encryptedPayload": {
+          "type": "string",
+          "description": "Base64 AES-256-GCM encrypted JSON containing clientName, className, notes, and summary fields."
+        },
+        "payloadIv": {
+          "type": "string",
+          "description": "Base64 12-byte GCM initialization vector for encryptedPayload."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when record was created (client writes FieldValue.serverTimestamp())."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when record was last updated (client writes FieldValue.serverTimestamp())."
+        }
+      },
+      "required": [
+        "userId",
+        "category",
+        "sessionDateMillis",
+        "dayName",
+        "timeRange",
+        "durationMinutes",
+        "hasAiSummary",
+        "encryptionVersion",
+        "encryptedPayload",
+        "payloadIv",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/security/{configId}": {
+      "schema": {
+        "$ref": "#/entities/VaultConfig"
+      },
+      "description": "Per-user E2EE vault configuration and 2FA key wrapping metadata."
+    },
+    "/users/{userId}/records/{recordId}": {
+      "schema": {
+        "$ref": "#/entities/CounselingRecord"
+      },
+      "description": "Per-user end-to-end encrypted counseling sessions and activity diary records."
+    }
+  }
+}

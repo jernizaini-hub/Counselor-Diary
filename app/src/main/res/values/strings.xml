@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">Diari Kaunselor</string>
+    <string name="app_tagline">Catatan Profesional • Analisis AI • Sulit Hujung ke Hujung</string>
+    <string name="sign_in_google">Log Masuk dengan Google</string>
+    <string name="nav_dashboard">Papan Pemuka</string>
+    <string name="nav_records">Rekod &amp; Diari</string>
+    <string name="nav_security">Keselamatan</string>
+    <string name="new_record_fab">Catatan Baharu</string>
+    <string name="generate_ai_summary">Jana Rumusan AI</string>
+    <string name="save_record">Simpan Rekod</string>
+    <string name="export_pdf">Cetak / Simpan PDF</string>
+    <string name="export_word">Eksport Word (.docx)</string>
+</resources>
