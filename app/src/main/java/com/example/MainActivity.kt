@@ -71,8 +71,8 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.auth.GoogleAuthHelper
 import com.example.crypto.AndroidVaultKeyCache
+import com.example.data.ai.AndroidGeminiApiKeyStore
 import com.example.data.ai.CounselorAiService
-import com.example.data.firebase.configureAppCheck
 import com.example.data.repository.CounselorRepository
 import com.example.model.ActivityCategory
 import com.example.ui.screens.AuthScreen
@@ -104,10 +104,6 @@ const val ROUTE_EDITOR = "editor"
 class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
-
-    // Mandatory Step 1: Configure App Check with launch intent before any UI or ViewModels
-    configureAppCheck(this, intent)
-
     enableEdgeToEdge()
     setContent {
       DiariKaunselorTheme {
@@ -254,10 +250,11 @@ private fun AuthenticatedCounselorApp(
             val db = FirebaseFirestore.getInstance(databaseId)
             CounselorViewModel(
               repository = CounselorRepository(db, Firebase.auth),
-              aiService = CounselorAiService(app),
+              aiService = CounselorAiService(),
               currentUserId = currentUserId,
               userEmail = counselorEmail,
               vaultKeyCache = AndroidVaultKeyCache(app),
+              geminiApiKeyStore = AndroidGeminiApiKeyStore(app),
             )
           }
         },
@@ -380,6 +377,8 @@ private fun UnlockedCounselorShell(
   val activePeriod by viewModel.statsPeriod.collectAsStateWithLifecycle()
   val cloudSyncState by viewModel.cloudSyncState.collectAsStateWithLifecycle()
   val aiSummaryState by viewModel.aiSummaryState.collectAsStateWithLifecycle()
+  val savedGeminiApiKey by viewModel.savedGeminiApiKey.collectAsStateWithLifecycle()
+  val geminiKeyTestState by viewModel.geminiKeyTestState.collectAsStateWithLifecycle()
   val selectedCategory by viewModel.selectedCategory.collectAsStateWithLifecycle()
   val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
 
@@ -551,6 +550,11 @@ private fun UnlockedCounselorShell(
             },
             onBuildEncryptedBackupJson = viewModel::buildEncryptedCloudBackupJson,
             onSignOut = onSignOut,
+            savedGeminiApiKey = savedGeminiApiKey,
+            geminiKeyTestState = geminiKeyTestState,
+            onSaveAndTestGeminiApiKey = viewModel::saveAndVerifyGeminiApiKey,
+            onClearGeminiApiKey = viewModel::clearGeminiApiKey,
+            onResetGeminiKeyTestState = viewModel::resetGeminiKeyTestState,
           )
         }
 
@@ -592,6 +596,14 @@ private fun UnlockedCounselorShell(
               )
             },
             onBack = { navController.popBackStack() },
+            hasGeminiApiKey = savedGeminiApiKey.isNotBlank(),
+            onOpenSecurityTab = {
+              navController.navigate(ROUTE_SECURITY) {
+                popUpTo(ROUTE_DASHBOARD) { saveState = true }
+                launchSingleTop = true
+                restoreState = true
+              }
+            },
           )
         }
       }

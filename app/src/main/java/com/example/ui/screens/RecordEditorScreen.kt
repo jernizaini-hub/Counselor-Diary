@@ -112,6 +112,8 @@ fun RecordEditorScreen(
   onSaveRecord: (CounselingRecord, onResult: (Boolean) -> Unit) -> Unit,
   onDeleteRecord: (String, onDone: () -> Unit) -> Unit,
   onBack: () -> Unit,
+  hasGeminiApiKey: Boolean = true,
+  onOpenSecurityTab: () -> Unit = {},
 ) {
   val context = LocalContext.current
   val categoryVisuals = rememberCategoryVisualMap()
@@ -957,18 +959,58 @@ fun RecordEditorScreen(
                 }
               }
 
+              if (!hasGeminiApiKey && aiSummaryState !is AiSummaryState.Error) {
+                Surface(
+                  color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f),
+                  shape = RoundedCornerShape(12.dp),
+                  modifier = Modifier.fillMaxWidth().testTag("missing_api_key_hint"),
+                ) {
+                  Column(
+                    modifier = Modifier.padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                  ) {
+                    Text(
+                      text =
+                        "Kunci Gemini API belum ditetapkan. Sila masukkan kunci Gemini API di tab Keselamatan untuk menggunakan ciri ini.",
+                      style = MaterialTheme.typography.bodySmall,
+                      color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    )
+                    OutlinedButton(
+                      onClick = onOpenSecurityTab,
+                      shape = RoundedCornerShape(10.dp),
+                      modifier = Modifier.testTag("open_security_for_key_hint_button"),
+                    ) {
+                      Text("Tetapkan Kunci di Tab Keselamatan", fontWeight = FontWeight.SemiBold)
+                    }
+                  }
+                }
+              }
+
               if (aiSummaryState is AiSummaryState.Error) {
                 Surface(
                   color = MaterialTheme.colorScheme.errorContainer,
                   shape = RoundedCornerShape(12.dp),
                   modifier = Modifier.fillMaxWidth(),
                 ) {
-                  Text(
-                    text = aiSummaryState.message,
-                    color = MaterialTheme.colorScheme.onErrorContainer,
-                    style = MaterialTheme.typography.bodySmall,
+                  Column(
                     modifier = Modifier.padding(10.dp),
-                  )
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                  ) {
+                    Text(
+                      text = aiSummaryState.message,
+                      color = MaterialTheme.colorScheme.onErrorContainer,
+                      style = MaterialTheme.typography.bodySmall,
+                    )
+                    if (aiSummaryState.requiresApiKeySetup) {
+                      OutlinedButton(
+                        onClick = onOpenSecurityTab,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.testTag("open_security_for_key_button"),
+                      ) {
+                        Text("Tetapkan Kunci di Tab Keselamatan", fontWeight = FontWeight.SemiBold)
+                      }
+                    }
+                  }
                 }
               }
 

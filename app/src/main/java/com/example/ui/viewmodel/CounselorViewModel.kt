@@ -6,7 +6,13 @@ import androidx.lifecycle.viewModelScope
 import com.example.crypto.E2eeCryptoManager
 import com.example.crypto.NoOpVaultKeyCache
 import com.example.crypto.VaultKeyCache
+import com.example.data.ai.AndroidGeminiApiKeyStore
 import com.example.data.ai.CounselorAiService
+import com.example.data.ai.GeminiApiKeyStore
+import com.example.data.ai.GeminiKeyVerificationResult
+import com.example.data.ai.InvalidGeminiApiKeyException
+import com.example.data.ai.MissingGeminiApiKeyException
+import com.example.data.ai.NoOpGeminiApiKeyStore
 import com.example.data.repository.CounselorRepository
 import com.example.model.ActivityCategory
 import com.example.model.AiSummaryResult
@@ -71,7 +77,20 @@ sealed interface AiSummaryState {
 
   data class Success(val result: AiSummaryResult) : AiSummaryState
 
-  data class Error(val message: String) : AiSummaryState
+  data class Error(
+    val message: String,
+    val requiresApiKeySetup: Boolean = false,
+  ) : AiSummaryState
+}
+
+sealed interface GeminiKeyTestState {
+  data object Idle : GeminiKeyTestState
+
+  data object Testing : GeminiKeyTestState
+
+  data class Success(val message: String) : GeminiKeyTestState
+
+  data class Error(val message: String) : GeminiKeyTestState
 }
 
 sealed interface CloudSyncState {
@@ -109,6 +128,7 @@ class CounselorViewModel(
   private val currentUserId: String,
   private val userEmail: String,
   private val vaultKeyCache: VaultKeyCache = NoOpVaultKeyCache,
+  private val geminiApiKeyStore: GeminiApiKeyStore = NoOpGeminiApiKeyStore,
 ) : ViewModel() {
 
   private val unlockedKeyFlow = MutableStateFlow<SecretKey?>(null)
@@ -234,6 +254,14 @@ class CounselorViewModel(
   private val _aiSummaryState = MutableStateFlow<AiSummaryState>(AiSummaryState.Idle)
   val aiSummaryState: StateFlow<AiSummaryState> = _aiSummaryState.asStateFlow()
 
+  private val _savedGeminiApiKey =
+    MutableStateFlow(geminiApiKeyStore.loadKey(currentUserId).orEmpty())
+  val savedGeminiApiKey: StateFlow<String> = _savedGeminiApiKey.asStateFlow()
+
+  private val _geminiKeyTestState =
+    MutableStateFlow<GeminiKeyTestState>(GeminiKeyTestState.Idle)
+  val geminiKeyTestState: StateFlow<GeminiKeyTestState> = _geminiKeyTestState.asStateFlow()
+
   private val _statsPeriod = MutableStateFlow(StatsPeriod.ALL)
   val statsPeriod: StateFlow<StatsPeriod> = _statsPeriod.asStateFlow()
 
@@ -245,6 +273,10 @@ class CounselorViewModel(
 
   init {
     initializeVaultSession()
+    viewModelScope.launch {
+      val storedKey = withContext(Dispatchers.IO) { geminiApiKeyStore.loadKey(currentUserId).orEmpty() }
+      _savedGeminiApiKey.value = storedKey
+    }
     viewModelScope.launch {
       recordsState.collect { state ->
         when (state) {
@@ -503,7 +535,62 @@ class CounselorViewModel(
     autoInitErrorFlow.value = null
   }
 
-  // --- AI Summary Generation ---
+  // --- Gemini API Key Management & AI Summary Generation ---
+
+  fun saveAndVerifyGeminiApiKey(rawKey: String) {
+    val trimmed = rawKey.trim()
+    if (trimmed.isEmpty()) {
+      _geminiKeyTestState.value =
+        GeminiKeyTestState.Error("Sila tampal kunci Gemini API anda terlebih dahulu.")
+      return
+    }
+    if (trimmed.any { it.isWhitespace() }) {
+      _geminiKeyTestState.value =
+        GeminiKeyTestState.Error("Kunci API mengandungi ruang kosong. Sila semak semula.")
+      return
+    }
+
+    viewModelScope.launch {
+      _geminiKeyTestState.value = GeminiKeyTestState.Testing
+      when (val verification = aiService.verifyApiKey(trimmed)) {
+        is GeminiKeyVerificationResult.Valid -> {
+          withContext(Dispatchers.IO) { geminiApiKeyStore.saveKey(currentUserId, trimmed) }
+          _savedGeminiApiKey.value = trimmed
+          if (_aiSummaryState.value is AiSummaryState.Error) {
+            _aiSummaryState.value = AiSummaryState.Idle
+          }
+          val masked = AndroidGeminiApiKeyStore.maskKey(trimmed).orEmpty()
+          _geminiKeyTestState.value =
+            GeminiKeyTestState.Success(
+              "Kunci Gemini API ($masked) sah, disimpan tersulit dan sedia digunakan (${verification.activeModel})."
+            )
+        }
+        is GeminiKeyVerificationResult.InvalidKey -> {
+          _geminiKeyTestState.value = GeminiKeyTestState.Error(verification.message)
+        }
+        is GeminiKeyVerificationResult.NetworkError -> {
+          withContext(Dispatchers.IO) { geminiApiKeyStore.saveKey(currentUserId, trimmed) }
+          _savedGeminiApiKey.value = trimmed
+          _geminiKeyTestState.value =
+            GeminiKeyTestState.Error(
+              "Kunci disimpan pada peranti, tetapi ujian dalam talian tidak dapat diselesaikan: ${verification.message}"
+            )
+        }
+      }
+    }
+  }
+
+  fun clearGeminiApiKey() {
+    viewModelScope.launch {
+      withContext(Dispatchers.IO) { geminiApiKeyStore.clearKey(currentUserId) }
+      _savedGeminiApiKey.value = ""
+      _geminiKeyTestState.value = GeminiKeyTestState.Idle
+    }
+  }
+
+  fun resetGeminiKeyTestState() {
+    _geminiKeyTestState.value = GeminiKeyTestState.Idle
+  }
 
   fun generateAiSummary(draft: CounselingRecord) {
     if (draft.notes.isBlank()) {
@@ -516,10 +603,35 @@ class CounselorViewModel(
     viewModelScope.launch {
       _aiSummaryState.value = AiSummaryState.Loading
       try {
-        val result = aiService.generateCounselingSummary(draft)
+        val apiKey =
+          withContext(Dispatchers.IO) {
+            geminiApiKeyStore.loadKey(currentUserId) ?: _savedGeminiApiKey.value
+          }
+        if (apiKey.isBlank()) {
+          _aiSummaryState.value =
+            AiSummaryState.Error(
+              message = MissingGeminiApiKeyException().message
+                ?: "Kunci Gemini API belum dimasukkan. Sila ke tab Keselamatan untuk memasukkan kunci Gemini API anda.",
+              requiresApiKeySetup = true,
+            )
+          return@launch
+        }
+        val result = aiService.generateCounselingSummary(draft, apiKey)
         _aiSummaryState.value = AiSummaryState.Success(result)
       } catch (e: CancellationException) {
         throw e
+      } catch (e: MissingGeminiApiKeyException) {
+        _aiSummaryState.value =
+          AiSummaryState.Error(
+            message = e.message ?: "Kunci Gemini API belum dimasukkan.",
+            requiresApiKeySetup = true,
+          )
+      } catch (e: InvalidGeminiApiKeyException) {
+        _aiSummaryState.value =
+          AiSummaryState.Error(
+            message = e.message ?: "Kunci Gemini API tidak sah.",
+            requiresApiKeySetup = true,
+          )
       } catch (e: Exception) {
         _aiSummaryState.value =
           AiSummaryState.Error(e.message ?: "Gagal menjana analisis rumusan AI.")

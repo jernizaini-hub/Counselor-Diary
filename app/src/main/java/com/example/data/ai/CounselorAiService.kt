@@ -1,312 +1,584 @@
 package com.example.data.ai
 
-import android.content.Context
 import android.util.Log
-import com.example.data.firebase.ensureValidAppCheckToken
 import com.example.model.ActivityCategory
 import com.example.model.AiSummaryResult
 import com.example.model.CounselingRecord
-import com.google.firebase.Firebase
-import com.google.firebase.ai.GenerativeModel
-import com.google.firebase.ai.ai
-import com.google.firebase.ai.type.FinishReason
-import com.google.firebase.ai.type.HarmBlockThreshold
-import com.google.firebase.ai.type.HarmCategory
-import com.google.firebase.ai.type.PromptBlockedException
-import com.google.firebase.ai.type.ResponseStoppedException
-import com.google.firebase.ai.type.SafetySetting
-import com.google.firebase.ai.type.Schema
-import com.google.firebase.ai.type.content
-import com.google.firebase.ai.type.generationConfig
+import java.io.BufferedReader
+import java.io.IOException
+import java.io.InputStreamReader
+import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
+import java.net.URL
+import java.nio.charset.StandardCharsets
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import org.json.JSONArray
 import org.json.JSONObject
 
-class CounselorAiService(
-  private val appContext: Context? = null,
-) {
-  private val summarySchema =
-    Schema.obj(
-      properties =
-        mapOf(
-          "perkara" to
-            Schema.string(
-              description =
-                "Ringkasan padat isu utama, tema, rumusan perbincangan atau perkara pokok yang dijalankan dalam Bahasa Melayu profesional."
-            ),
-          "persoalan" to
-            Schema.string(
-              description =
-                "Persoalan utama klien, isu berbangkit penjaga/murid, atau soalan penerokaan kritikal untuk tindakan susulan."
-            ),
-          "huraianIntervensi" to
-            Schema.string(
-              description =
-                "Huraian terperinci intervensi kaunseling, keputusan, pendekatan psikologi, serta pelan tindakan susulan."
-            ),
-        )
-    )
+class MissingGeminiApiKeyException(
+  message: String =
+    "Kunci Gemini API belum dimasukkan. Sila ke tab Keselamatan untuk memasukkan kunci Gemini API anda terlebih dahulu."
+) : IllegalStateException(message)
 
-  private val programSchema =
-    Schema.obj(
-      properties =
-        mapOf(
-          "rumusanProgram" to
-            Schema.string(
-              description =
-                "Rumusan Program: ringkasan menyeluruh pelaksanaan, pengisian, penyertaan serta impak program dalam Bahasa Melayu profesional."
-            ),
-          "objektif" to
-            Schema.string(
-              description =
-                "Objektif Program: senarai objektif utama program yang disasarkan dan tahap pencapaiannya."
-            ),
-          "kelebihanKelemahan" to
-            Schema.string(
-              description =
-                "Kelebihan & Kelemahan: kekuatan pelaksanaan program serta kelemahan atau ruang penambahbaikan pada masa hadapan."
-            ),
-          "huraianIntervensi" to
-            Schema.string(
-              description =
-                "Huraian Intervensi: langkah susulan, bimbingan lanjutan atau tindakan penambahbaikan untuk kumpulan sasaran."
-            ),
-        )
-    )
+class InvalidGeminiApiKeyException(
+  message: String,
+  cause: Throwable? = null,
+) : IllegalStateException(message, cause)
 
-  private val jsonGenerationConfig = generationConfig {
-    responseMimeType = "application/json"
-    responseSchema = summarySchema
-  }
+data class HttpResponseData(
+  val code: Int,
+  val body: String,
+)
 
-  private val programGenerationConfig = generationConfig {
-    responseMimeType = "application/json"
-    responseSchema = programSchema
-  }
+sealed interface GeminiKeyVerificationResult {
+  data class Valid(val activeModel: String) : GeminiKeyVerificationResult
 
-  private val clinicalSafetySettings =
-    listOf(
-      SafetySetting(HarmCategory.HARASSMENT, HarmBlockThreshold.ONLY_HIGH),
-      SafetySetting(HarmCategory.HATE_SPEECH, HarmBlockThreshold.ONLY_HIGH),
-      SafetySetting(HarmCategory.SEXUALLY_EXPLICIT, HarmBlockThreshold.ONLY_HIGH),
-      SafetySetting(HarmCategory.DANGEROUS_CONTENT, HarmBlockThreshold.ONLY_HIGH),
-    )
+  data class InvalidKey(val message: String) : GeminiKeyVerificationResult
 
-  private val counselorSystemInstruction =
-    content {
-      text(
-        "Anda ialah pembantu dokumentasi klinikal rasmi untuk Guru Bimbingan dan Kaunseling (Kaunselor Berdaftar) " +
-          "di institusi pendidikan Malaysia. Semua input adalah catatan sesi profesional untuk tujuan pendokumentasian, " +
-          "penilaian risiko, sokongan psikososial, dan perancangan intervensi keselamatan klien. " +
-          "Jangan sekali-kali menjana arahan mencederakan diri; sebaliknya, apabila nota menyebut risiko keselamatan atau " +
-          "kecenderungan mencederakan diri, fokuskan huraian intervensi pada protokol saringan keselamatan segera, " +
-          "rujukan pakar/waris/pentadbir mengikut SOP kaunseling, serta pelan sokongan protektif yang profesional dan beretika."
-      )
+  data class NetworkError(val message: String) : GeminiKeyVerificationResult
+}
+
+interface GeminiHttpTransport {
+  suspend fun get(url: String, apiKey: String): HttpResponseData
+
+  suspend fun postJson(url: String, apiKey: String, jsonBody: String): HttpResponseData
+}
+
+object DefaultGeminiHttpTransport : GeminiHttpTransport {
+  private const val CONNECT_TIMEOUT_MS = 15_000
+  private const val READ_TIMEOUT_MS = 45_000
+
+  override suspend fun get(url: String, apiKey: String): HttpResponseData =
+    withContext(Dispatchers.IO) {
+      val connection = (URL(url).openConnection() as HttpURLConnection)
+      try {
+        connection.requestMethod = "GET"
+        connection.connectTimeout = CONNECT_TIMEOUT_MS
+        connection.readTimeout = READ_TIMEOUT_MS
+        connection.setRequestProperty("x-goog-api-key", apiKey)
+        connection.setRequestProperty("Accept", "application/json")
+        readHttpResponse(connection)
+      } finally {
+        connection.disconnect()
+      }
     }
 
-  private val fastModel: GenerativeModel by lazy {
-    Firebase.ai.generativeModel(
-      modelName = "gemini-3.5-flash-lite",
-      generationConfig = jsonGenerationConfig,
-      safetySettings = clinicalSafetySettings,
-      systemInstruction = counselorSystemInstruction,
-    )
-  }
+  override suspend fun postJson(url: String, apiKey: String, jsonBody: String): HttpResponseData =
+    withContext(Dispatchers.IO) {
+      val bodyBytes = jsonBody.toByteArray(StandardCharsets.UTF_8)
+      val connection = (URL(url).openConnection() as HttpURLConnection)
+      try {
+        connection.requestMethod = "POST"
+        connection.connectTimeout = CONNECT_TIMEOUT_MS
+        connection.readTimeout = READ_TIMEOUT_MS
+        connection.doOutput = true
+        connection.setFixedLengthStreamingMode(bodyBytes.size)
+        connection.setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+        connection.setRequestProperty("Accept", "application/json")
+        connection.setRequestProperty("x-goog-api-key", apiKey)
+        connection.outputStream.use { out ->
+          out.write(bodyBytes)
+          out.flush()
+        }
+        readHttpResponse(connection)
+      } finally {
+        connection.disconnect()
+      }
+    }
 
-  private val standardModel: GenerativeModel by lazy {
-    Firebase.ai.generativeModel(
-      modelName = "gemini-3.8-flash",
-      generationConfig = jsonGenerationConfig,
-      safetySettings = clinicalSafetySettings,
-      systemInstruction = counselorSystemInstruction,
-    )
+  private fun readHttpResponse(connection: HttpURLConnection): HttpResponseData {
+    val code = connection.responseCode
+    val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+    val body =
+      if (stream != null) {
+        BufferedReader(InputStreamReader(stream, StandardCharsets.UTF_8)).use { it.readText() }
+      } else {
+        ""
+      }
+    return HttpResponseData(code = code, body = body)
   }
+}
 
-  private val programFastModel: GenerativeModel by lazy {
-    Firebase.ai.generativeModel(
-      modelName = "gemini-3.5-flash-lite",
-      generationConfig = programGenerationConfig,
-      safetySettings = clinicalSafetySettings,
-      systemInstruction = counselorSystemInstruction,
-    )
-  }
+class CounselorAiService(
+  private val transport: GeminiHttpTransport = DefaultGeminiHttpTransport,
+) {
 
-  private val programStandardModel: GenerativeModel by lazy {
-    Firebase.ai.generativeModel(
-      modelName = "gemini-3.8-flash",
-      generationConfig = programGenerationConfig,
-      safetySettings = clinicalSafetySettings,
-      systemInstruction = counselorSystemInstruction,
-    )
-  }
-
-  suspend fun generateCounselingSummary(draft: CounselingRecord): AiSummaryResult {
-    val prompt = buildCategoryPrompt(draft)
-    val primaryModel =
-      if (draft.category == ActivityCategory.PROGRAM) programFastModel else fastModel
-    val fallbackModel =
-      if (draft.category == ActivityCategory.PROGRAM) programStandardModel else standardModel
+  suspend fun verifyApiKey(rawKey: String): GeminiKeyVerificationResult {
+    val apiKey = rawKey.trim()
+    if (apiKey.isEmpty()) {
+      return GeminiKeyVerificationResult.InvalidKey("Sila masukkan kunci Gemini API terlebih dahulu.")
+    }
+    if (apiKey.any { it.isWhitespace() }) {
+      return GeminiKeyVerificationResult.InvalidKey(
+        "Format kunci API tidak sah kerana mengandungi ruang kosong."
+      )
+    }
 
     return withContext(Dispatchers.IO) {
-      // Step 1: Pre-flight App Check health check & auto-recovery after app restarts
-      appContext?.let { ensureValidAppCheckToken(it, forceRefreshAndReset = false) }
-
       try {
-        streamStructuredSummary(primaryModel, draft.category, prompt)
-      } catch (e: CancellationException) {
-        throw e
-      } catch (e: PromptBlockedException) {
-        throw mapSafetyBlockError(e)
-      } catch (e: ResponseStoppedException) {
-        throw mapResponseStoppedError(e)
-      } catch (primaryError: Exception) {
-        if (isAppCheckFailure(primaryError) && appContext != null) {
-          Log.w(TAG, "App Check token rejected by server; resetting and retrying AI call", primaryError)
-          ensureValidAppCheckToken(appContext, forceRefreshAndReset = true)
-          try {
-            return@withContext streamStructuredSummary(primaryModel, draft.category, prompt)
-          } catch (e: CancellationException) {
-            throw e
-          } catch (e: PromptBlockedException) {
-            throw mapSafetyBlockError(e)
-          } catch (e: ResponseStoppedException) {
-            throw mapResponseStoppedError(e)
-          } catch (retryError: Exception) {
-            if (isAppCheckFailure(retryError)) {
-              val detail = retryError.localizedMessage?.takeIf { it.isNotBlank() } ?: "ditolak oleh pelayan"
-              throw IllegalStateException(
-                "Pengesahan App Check masih gagal selepas cubaan automatik ($detail). " +
-                  "Sila pastikan internet aktif tanpa sekatan VPN/Private DNS dan Google Play Services dikemas kini.",
-                retryError,
-              )
-            }
-            return@withContext runStandardModelFallback(
-              fallbackModel,
-              draft.category,
-              prompt,
-              retryError,
+        val response =
+          withTimeout(VERIFY_TIMEOUT_MS) {
+            transport.get(
+              url = "$GEMINI_API_BASE/models?pageSize=50",
+              apiKey = apiKey,
             )
           }
-        }
-
-        if (primaryError is TimeoutCancellationException) {
-          Log.w(TAG, "Model pantas tamat tempoh, mencuba model standard", primaryError)
+        if (response.code in 200..299) {
+          val models = parseAvailableGenerateContentModels(response.body)
+          val selected = pickBestFlashModel(models) ?: PREFERRED_MODELS.first()
+          GeminiKeyVerificationResult.Valid(selected)
+        } else if (isAuthOrKeyError(response.code, response.body)) {
+          val detail = extractApiErrorMessage(response.code, response.body)
+          GeminiKeyVerificationResult.InvalidKey(
+            "Kunci Gemini API ditolak oleh Google ($detail). Sila semak kunci di Google AI Studio."
+          )
         } else {
-          Log.w(TAG, "Model pantas gagal, mencuba model standard", primaryError)
+          val detail = extractApiErrorMessage(response.code, response.body)
+          GeminiKeyVerificationResult.NetworkError("Pelayan Gemini memulangkan ralat: $detail")
         }
-        runStandardModelFallback(fallbackModel, draft.category, prompt, primaryError)
+      } catch (e: CancellationException) {
+        throw e
+      } catch (e: TimeoutCancellationException) {
+        GeminiKeyVerificationResult.NetworkError(
+          "Masa menunggu pengesahan tamat. Sila semak sambungan internet anda."
+        )
+      } catch (e: IOException) {
+        GeminiKeyVerificationResult.NetworkError(
+          "Tidak dapat menghubungi pelayan Gemini (${e.localizedMessage ?: "tiada sambungan"})."
+        )
+      } catch (e: Exception) {
+        GeminiKeyVerificationResult.NetworkError(
+          e.localizedMessage ?: "Ralat semasa menguji kunci Gemini API."
+        )
       }
     }
   }
 
-  private suspend fun runStandardModelFallback(
-    model: GenerativeModel,
-    category: ActivityCategory,
-    prompt: String,
-    primaryError: Exception,
+  suspend fun generateCounselingSummary(
+    draft: CounselingRecord,
+    rawApiKey: String,
   ): AiSummaryResult {
+    val apiKey = rawApiKey.trim()
+    if (apiKey.isEmpty()) {
+      throw MissingGeminiApiKeyException()
+    }
+
+    val requestPayload = buildGenerateContentPayload(draft)
+
+    return withContext(Dispatchers.IO) {
+      var lastError: Exception? = null
+      val attempted = linkedSetOf<String>()
+      val candidatesToTry = ArrayDeque(PREFERRED_MODELS)
+      var discoveredModels = false
+
+      while (candidatesToTry.isNotEmpty()) {
+        val modelName = candidatesToTry.removeFirst()
+        if (!attempted.add(modelName)) continue
+
+        try {
+          val response =
+            withTimeout(AI_TIMEOUT_MS) {
+              transport.postJson(
+                url = "$GEMINI_API_BASE/models/$modelName:generateContent",
+                apiKey = apiKey,
+                jsonBody = requestPayload,
+              )
+            }
+
+          if (response.code in 200..299) {
+            return@withContext extractSummaryFromGeminiResponse(draft.category, response.body)
+          }
+
+          if (isAuthOrKeyError(response.code, response.body)) {
+            val detail = extractApiErrorMessage(response.code, response.body)
+            throw InvalidGeminiApiKeyException(
+              "Kunci Gemini API tidak sah atau telah dibatalkan ($detail). Sila semak kunci anda di tab Keselamatan."
+            )
+          }
+
+          val errorMsg = extractApiErrorMessage(response.code, response.body)
+          if (response.code == 404 && !discoveredModels) {
+            discoveredModels = true
+            discoverFlashModelsSafely(apiKey).forEach { discovered ->
+              if (discovered !in attempted) {
+                candidatesToTry.addLast(discovered)
+              }
+            }
+            lastError = IllegalStateException(errorMsg)
+            continue
+          }
+
+          if (response.code == 429 || response.code >= 500 || response.code == 404) {
+            Log.w(TAG, "Model $modelName failed (${response.code}): $errorMsg")
+            lastError = IllegalStateException(mapHttpStatusToMalayMessage(response.code, errorMsg))
+            continue
+          }
+
+          throw IllegalStateException(mapHttpStatusToMalayMessage(response.code, errorMsg))
+        } catch (e: CancellationException) {
+          throw e
+        } catch (e: InvalidGeminiApiKeyException) {
+          throw e
+        } catch (e: TimeoutCancellationException) {
+          Log.w(TAG, "Model $modelName timed out", e)
+          lastError =
+            IllegalStateException(
+              "Sambungan Gemini API mengambil masa terlalu lama (melebihi 45 saat). Sila pastikan internet stabil dan cuba semula.",
+              e,
+            )
+        } catch (e: SocketTimeoutException) {
+          Log.w(TAG, "Model $modelName socket timed out", e)
+          lastError =
+            IllegalStateException(
+              "Sambungan Gemini API mengambil masa terlalu lama. Sila cuba semula.",
+              e,
+            )
+        } catch (e: IOException) {
+          Log.e(TAG, "Network error calling Gemini API ($modelName)", e)
+          lastError =
+            IllegalStateException(
+              "Gagal menghubungi pelayan Gemini API. Sila pastikan internet aktif (${e.localizedMessage ?: "ralat rangkaian"}).",
+              e,
+            )
+        }
+      }
+
+      throw lastError
+        ?: IllegalStateException("Gagal menjana rumusan AI. Sila cuba semula sebentar lagi.")
+    }
+  }
+
+  private suspend fun discoverFlashModelsSafely(apiKey: String): List<String> {
     return try {
-      streamStructuredSummary(model, category, prompt)
-    } catch (e: TimeoutCancellationException) {
-      Log.e(TAG, "Janaan AI tamat tempoh (model standard)", e)
-      throw IllegalStateException(
-        "Sambungan AI mengambil masa terlalu lama (melebihi 45 saat). Sila pastikan internet stabil dan cuba semula.",
-        e,
-      )
+      val response =
+        withTimeout(VERIFY_TIMEOUT_MS) {
+          transport.get(
+            url = "$GEMINI_API_BASE/models?pageSize=50",
+            apiKey = apiKey,
+          )
+        }
+      if (response.code in 200..299) {
+        parseAvailableGenerateContentModels(response.body)
+      } else {
+        emptyList()
+      }
     } catch (e: CancellationException) {
       throw e
-    } catch (e: PromptBlockedException) {
-      throw mapSafetyBlockError(e)
-    } catch (e: ResponseStoppedException) {
-      throw mapResponseStoppedError(e)
-    } catch (fallbackError: Exception) {
-      Log.e(TAG, "Ralat janaan AI", fallbackError)
-      if (isAppCheckFailure(fallbackError)) {
-        val detail = fallbackError.localizedMessage?.takeIf { it.isNotBlank() } ?: "token tidak sah"
-        throw IllegalStateException(
-          "Ralat pengesahan keselamatan aplikasi (Firebase App Check): $detail. " +
-            "Sila pastikan internet aktif tanpa sekatan VPN/Private DNS, tarikh peranti adalah automatik, dan cuba semula.",
-          fallbackError,
-        )
-      }
-      val detail = fallbackError.localizedMessage ?: primaryError.localizedMessage
-      throw IllegalStateException(
-        detail ?: "Gagal menjana rumusan AI. Sila semak sambungan internet.",
-        fallbackError,
-      )
-    }
-  }
-
-  private suspend fun streamStructuredSummary(
-    model: GenerativeModel,
-    category: ActivityCategory,
-    prompt: String,
-  ): AiSummaryResult {
-    val accumulated = StringBuilder()
-    withTimeout(AI_TIMEOUT_MS) {
-      model.generateContentStream(prompt).collect { chunk ->
-        val candidate = chunk.candidates.firstOrNull()
-        if (candidate?.finishReason == FinishReason.SAFETY ||
-          candidate?.finishReason == FinishReason.PROHIBITED_CONTENT ||
-          candidate?.finishReason == FinishReason.BLOCKLIST
-        ) {
-          throw IllegalStateException(SAFETY_GUIDANCE_MESSAGE)
-        }
-        chunk.text?.let { accumulated.append(it) }
-      }
-    }
-    val jsonText =
-      accumulated.toString().trim().takeIf { it.isNotBlank() }
-        ?: throw IllegalStateException("Model AI memulangkan respons kosong. Sila cuba semula.")
-
-    return parseSummaryJson(category, jsonText)
-  }
-
-  private fun isAppCheckFailure(error: Throwable): Boolean {
-    val message =
-      generateSequence(error) { it.cause }
-        .mapNotNull { it.message }
-        .joinToString(" ")
-        .lowercase()
-    return message.contains("app check") ||
-      message.contains("appcheck") ||
-      message.contains("attestation")
-  }
-
-  private fun mapSafetyBlockError(error: PromptBlockedException): IllegalStateException {
-    Log.w(TAG, "Prompt blocked by Gemini safety filter", error)
-    return IllegalStateException(SAFETY_GUIDANCE_MESSAGE, error)
-  }
-
-  private fun mapResponseStoppedError(error: ResponseStoppedException): IllegalStateException {
-    val reason = error.response.candidates.firstOrNull()?.finishReason
-    Log.w(TAG, "Response stopped early: $reason", error)
-    return when (reason) {
-      FinishReason.SAFETY, FinishReason.PROHIBITED_CONTENT, FinishReason.BLOCKLIST ->
-        IllegalStateException(SAFETY_GUIDANCE_MESSAGE, error)
-      FinishReason.MAX_TOKENS ->
-        IllegalStateException(
-          "Catatan terlalu panjang untuk diproses serentak. Sila ringkaskan sedikit catatan dan cuba semula.",
-          error,
-        )
-      else ->
-        IllegalStateException(
-          error.localizedMessage ?: "Janaan AI terhenti sebelum selesai. Sila cuba semula.",
-          error,
-        )
+    } catch (_: Exception) {
+      emptyList()
     }
   }
 
   internal companion object {
     const val TAG = "CounselorAiService"
+    const val GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta"
     const val AI_TIMEOUT_MS = 45_000L
+    const val VERIFY_TIMEOUT_MS = 15_000L
+    val PREFERRED_MODELS =
+      listOf(
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.5-flash",
+        "gemini-2.5-flash",
+      )
+
     const val SAFETY_GUIDANCE_MESSAGE =
       "Catatan mengandungi istilah sensitif atau risiko tinggi yang ditahan oleh penapis keselamatan AI. " +
         "Sila guna ungkapan klinikal neutral (cth. 'risiko keselamatan diri / memerlukan saringan segera') untuk janaan AI, " +
         "atau isi kotak rumusan secara manual serta teruskan rujukan SOP kecemasan kaunseling jika perlu."
+
+    private const val SYSTEM_INSTRUCTION_TEXT =
+      "Anda ialah pembantu dokumentasi klinikal rasmi untuk Guru Bimbingan dan Kaunseling (Kaunselor Berdaftar) " +
+        "di institusi pendidikan Malaysia. Semua input adalah catatan sesi profesional untuk tujuan pendokumentasian, " +
+        "penilaian risiko, sokongan psikososial, dan perancangan intervensi keselamatan klien. " +
+        "Jangan sekali-kali menjana arahan mencederakan diri; sebaliknya, apabila nota menyebut risiko keselamatan atau " +
+        "kecenderungan mencederakan diri, fokuskan huraian intervensi pada protokol saringan keselamatan segera, " +
+        "rujukan pakar/waris/pentadbir mengikut SOP kaunseling, serta pelan sokongan protektif yang profesional dan beretika."
+
+    internal fun buildGenerateContentPayload(draft: CounselingRecord): String {
+      val prompt = buildCategoryPrompt(draft)
+      val schemaJson = buildResponseSchemaJson(draft.category)
+
+      val safetySettings =
+        JSONArray().apply {
+          listOf(
+              "HARM_CATEGORY_HARASSMENT",
+              "HARM_CATEGORY_HATE_SPEECH",
+              "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+              "HARM_CATEGORY_DANGEROUS_CONTENT",
+            )
+            .forEach { harmCategory ->
+              put(
+                JSONObject().apply {
+                  put("category", harmCategory)
+                  put("threshold", "BLOCK_ONLY_HIGH")
+                }
+              )
+            }
+        }
+
+      return JSONObject()
+        .apply {
+          put(
+            "systemInstruction",
+            JSONObject().apply {
+              put("parts", JSONArray().put(JSONObject().put("text", SYSTEM_INSTRUCTION_TEXT)))
+            },
+          )
+          put(
+            "contents",
+            JSONArray()
+              .put(
+                JSONObject().apply {
+                  put("role", "user")
+                  put("parts", JSONArray().put(JSONObject().put("text", prompt)))
+                }
+              ),
+          )
+          put("safetySettings", safetySettings)
+          put(
+            "generationConfig",
+            JSONObject().apply {
+              put("responseMimeType", "application/json")
+              put("responseSchema", schemaJson)
+            },
+          )
+        }
+        .toString()
+    }
+
+    internal fun buildResponseSchemaJson(category: ActivityCategory): JSONObject {
+      return if (category == ActivityCategory.PROGRAM) {
+        JSONObject().apply {
+          put("type", "OBJECT")
+          put(
+            "properties",
+            JSONObject().apply {
+              put(
+                "rumusanProgram",
+                JSONObject().apply {
+                  put("type", "STRING")
+                  put(
+                    "description",
+                    "Rumusan Program: ringkasan menyeluruh pelaksanaan, pengisian, penyertaan serta impak program dalam Bahasa Melayu profesional.",
+                  )
+                },
+              )
+              put(
+                "objektif",
+                JSONObject().apply {
+                  put("type", "STRING")
+                  put(
+                    "description",
+                    "Objektif Program: senarai objektif utama program yang disasarkan dan tahap pencapaiannya.",
+                  )
+                },
+              )
+              put(
+                "kelebihanKelemahan",
+                JSONObject().apply {
+                  put("type", "STRING")
+                  put(
+                    "description",
+                    "Kelebihan & Kelemahan: kekuatan pelaksanaan program serta kelemahan atau ruang penambahbaikan pada masa hadapan.",
+                  )
+                },
+              )
+              put(
+                "huraianIntervensi",
+                JSONObject().apply {
+                  put("type", "STRING")
+                  put(
+                    "description",
+                    "Huraian Intervensi: langkah susulan, bimbingan lanjutan atau tindakan penambahbaikan untuk kumpulan sasaran.",
+                  )
+                },
+              )
+            },
+          )
+          put(
+            "required",
+            JSONArray(
+              listOf("rumusanProgram", "objektif", "kelebihanKelemahan", "huraianIntervensi")
+            ),
+          )
+        }
+      } else {
+        JSONObject().apply {
+          put("type", "OBJECT")
+          put(
+            "properties",
+            JSONObject().apply {
+              put(
+                "perkara",
+                JSONObject().apply {
+                  put("type", "STRING")
+                  put(
+                    "description",
+                    "Ringkasan padat isu utama, tema, rumusan perbincangan atau perkara pokok yang dijalankan dalam Bahasa Melayu profesional.",
+                  )
+                },
+              )
+              put(
+                "persoalan",
+                JSONObject().apply {
+                  put("type", "STRING")
+                  put(
+                    "description",
+                    "Persoalan utama klien, isu berbangkit penjaga/murid, atau soalan penerokaan kritikal untuk tindakan susulan.",
+                  )
+                },
+              )
+              put(
+                "huraianIntervensi",
+                JSONObject().apply {
+                  put("type", "STRING")
+                  put(
+                    "description",
+                    "Huraian terperinci intervensi kaunseling, keputusan, pendekatan psikologi, serta pelan tindakan susulan.",
+                  )
+                },
+              )
+            },
+          )
+          put("required", JSONArray(listOf("perkara", "persoalan", "huraianIntervensi")))
+        }
+      }
+    }
+
+    internal fun extractSummaryFromGeminiResponse(
+      category: ActivityCategory,
+      responseBody: String,
+    ): AiSummaryResult {
+      val root = JSONObject(responseBody)
+
+      val promptFeedback = root.optJSONObject("promptFeedback")
+      val blockReason = promptFeedback?.optString("blockReason", "")?.trim().orEmpty()
+      if (blockReason.isNotEmpty() && blockReason != "BLOCK_REASON_UNSPECIFIED") {
+        throw IllegalStateException(SAFETY_GUIDANCE_MESSAGE)
+      }
+
+      val candidates = root.optJSONArray("candidates")
+      val firstCandidate =
+        candidates?.takeIf { it.length() > 0 }?.optJSONObject(0)
+          ?: throw IllegalStateException("Model AI tidak memulangkan calon jawapan. Sila cuba semula.")
+
+      val finishReason = firstCandidate.optString("finishReason", "").trim()
+      if (finishReason in setOf("SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII")) {
+        throw IllegalStateException(SAFETY_GUIDANCE_MESSAGE)
+      }
+
+      val parts = firstCandidate.optJSONObject("content")?.optJSONArray("parts")
+      val textBuilder = StringBuilder()
+      if (parts != null) {
+        for (i in 0 until parts.length()) {
+          val part = parts.optJSONObject(i) ?: continue
+          if (part.optBoolean("thought", false)) continue
+          val partText = part.optString("text", "")
+          if (partText.isNotEmpty()) {
+            textBuilder.append(partText)
+          }
+        }
+      }
+
+      val rawText = textBuilder.toString().trim()
+      if (rawText.isEmpty()) {
+        if (finishReason == "MAX_TOKENS") {
+          throw IllegalStateException(
+            "Catatan terlalu panjang untuk diproses serentak. Sila ringkaskan sedikit catatan dan cuba semula."
+          )
+        }
+        throw IllegalStateException("Model AI memulangkan respons kosong. Sila cuba semula.")
+      }
+
+      val cleanedJson = stripOptionalMarkdownFences(rawText)
+      return parseSummaryJson(category, cleanedJson)
+    }
+
+    internal fun stripOptionalMarkdownFences(raw: String): String {
+      val trimmed = raw.trim()
+      if (!trimmed.startsWith("```")) return trimmed
+      return trimmed
+        .removePrefix("```json")
+        .removePrefix("```JSON")
+        .removePrefix("```")
+        .removeSuffix("```")
+        .trim()
+    }
+
+    internal fun parseAvailableGenerateContentModels(responseBody: String): List<String> {
+      return try {
+        val root = JSONObject(responseBody)
+        val arr = root.optJSONArray("models") ?: return emptyList()
+        val names = mutableListOf<String>()
+        for (i in 0 until arr.length()) {
+          val obj = arr.optJSONObject(i) ?: continue
+          val methods = obj.optJSONArray("supportedGenerationMethods") ?: continue
+          val supportsGenerate =
+            (0 until methods.length()).any { idx ->
+              methods.optString(idx) == "generateContent"
+            }
+          if (!supportsGenerate) continue
+          val fullName = obj.optString("name", "").trim()
+          val shortName = fullName.removePrefix("models/")
+          if (shortName.startsWith("gemini-") && !shortName.contains("image") && !shortName.contains("tts")) {
+            names.add(shortName)
+          }
+        }
+        names
+      } catch (_: Exception) {
+        emptyList()
+      }
+    }
+
+    internal fun pickBestFlashModel(available: List<String>): String? {
+      for (preferred in PREFERRED_MODELS) {
+        if (preferred in available) return preferred
+      }
+      return available.firstOrNull { it.contains("flash", ignoreCase = true) }
+        ?: available.firstOrNull()
+    }
+
+    internal fun isAuthOrKeyError(statusCode: Int, responseBody: String): Boolean {
+      val lower = responseBody.lowercase()
+      return statusCode == 401 ||
+        (statusCode == 400 && (lower.contains("api_key_invalid") || lower.contains("api key not valid"))) ||
+        (statusCode == 403 && (lower.contains("api_key") || lower.contains("api key") || lower.contains("consumer")))
+    }
+
+    internal fun extractApiErrorMessage(statusCode: Int, responseBody: String): String {
+      val trimmed = responseBody.trim()
+      if (trimmed.isNotEmpty()) {
+        try {
+          val err = JSONObject(trimmed).optJSONObject("error")
+          val msg = err?.optString("message", "")?.trim().orEmpty()
+          val status = err?.optString("status", "")?.trim().orEmpty()
+          if (msg.isNotEmpty()) {
+            return if (status.isNotEmpty()) "HTTP $statusCode ($status): $msg" else "HTTP $statusCode: $msg"
+          }
+        } catch (_: Exception) {
+          // ignore
+        }
+        return "HTTP $statusCode: ${trimmed.take(180)}"
+      }
+      return "HTTP $statusCode daripada pelayan Gemini API"
+    }
+
+    private fun mapHttpStatusToMalayMessage(statusCode: Int, detail: String): String =
+      when (statusCode) {
+        429 ->
+          "Had kuota Gemini API sementara dicapai ($detail). Sila tunggu sebentar dan cuba semula."
+        404 ->
+          "Model Gemini tidak ditemui untuk kunci API ini ($detail)."
+        in 500..599 ->
+          "Pelayan Gemini API sedang sibuk atau mengalami gangguan sementara ($detail). Sila cuba semula."
+        else ->
+          "Ralat Gemini API ($detail)."
+      }
 
     internal fun buildCategoryPrompt(draft: CounselingRecord): String {
       return when (draft.category) {
