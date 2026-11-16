@@ -145,8 +145,9 @@ class CounselorAiService(
             throw mapResponseStoppedError(e)
           } catch (retryError: Exception) {
             if (isAppCheckFailure(retryError)) {
+              val detail = retryError.localizedMessage?.takeIf { it.isNotBlank() } ?: "ditolak oleh pelayan"
               throw IllegalStateException(
-                "Pengesahan App Check masih ditolak oleh pelayan selepas cubaan automatik. " +
+                "Pengesahan App Check masih gagal selepas cubaan automatik ($detail). " +
                   "Sila pastikan internet aktif tanpa sekatan VPN/Private DNS dan Google Play Services dikemas kini.",
                 retryError,
               )
@@ -186,8 +187,9 @@ class CounselorAiService(
     } catch (fallbackError: Exception) {
       Log.e(TAG, "Ralat janaan AI", fallbackError)
       if (isAppCheckFailure(fallbackError)) {
+        val detail = fallbackError.localizedMessage?.takeIf { it.isNotBlank() } ?: "token tidak sah"
         throw IllegalStateException(
-          "Ralat pengesahan keselamatan aplikasi (Firebase App Check). " +
+          "Ralat pengesahan keselamatan aplikasi (Firebase App Check): $detail. " +
             "Sila pastikan internet aktif tanpa sekatan VPN/Private DNS, tarikh peranti adalah automatik, dan cuba semula.",
           fallbackError,
         )
