@@ -81,8 +81,12 @@ fun RecordsListScreen(
         q.isEmpty() ||
           record.clientName.lowercase().contains(q) ||
           record.className.lowercase().contains(q) ||
+          record.organizer.lowercase().contains(q) ||
+          record.guardianName.lowercase().contains(q) ||
+          record.guardianPhone.lowercase().contains(q) ||
           record.notes.lowercase().contains(q) ||
           record.summaryMatter.lowercase().contains(q) ||
+          record.programStrengthsWeaknesses.lowercase().contains(q) ||
           record.category.displayName.lowercase().contains(q)
       catMatch && queryMatch
     }
@@ -335,18 +339,20 @@ fun RecordsListScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
               ) {
+                val cardTitle =
+                  listOf(record.clientName, record.className, record.organizer, record.guardianName)
+                    .filter { it.isNotBlank() }
+                    .take(2)
+                    .joinToString(" • ")
+                    .ifBlank { record.category.displayName }
                 ClientAvatarBadge(
-                  name = record.clientName.ifBlank { record.category.shortLabel },
+                  name = cardTitle,
                   accentColor = accent,
                   size = 44.dp,
                 )
                 Column(modifier = Modifier.weight(1f)) {
                   Text(
-                    text =
-                      listOf(record.clientName, record.className)
-                        .filter { it.isNotBlank() }
-                        .joinToString(" • ")
-                        .ifBlank { record.category.displayName },
+                    text = cardTitle,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,

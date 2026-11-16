@@ -31,6 +31,9 @@ data class CounselingRecord(
   val category: ActivityCategory = ActivityCategory.KAUNSELING_INDIVIDU,
   val clientName: String = "",
   val className: String = "",
+  val organizer: String = "",
+  val guardianName: String = "",
+  val guardianPhone: String = "",
   val sessionDateMillis: Long = System.currentTimeMillis(),
   val dayName: String = "",
   val timeRange: String = "",
@@ -38,6 +41,7 @@ data class CounselingRecord(
   val notes: String = "",
   val summaryMatter: String = "",
   val summaryQuestions: String = "",
+  val programStrengthsWeaknesses: String = "",
   val summaryIntervention: String = "",
   val hasAiSummary: Boolean = false,
   val encryptionVersion: String = "AES-256-GCM-v1",
@@ -82,4 +86,5 @@ data class AiSummaryResult(
   val matter: String,
   val questions: String,
   val intervention: String,
+  val strengthsWeaknesses: String = "",
 )

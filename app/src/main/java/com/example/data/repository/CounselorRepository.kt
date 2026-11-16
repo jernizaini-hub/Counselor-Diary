@@ -234,18 +234,24 @@ class CounselorRepository(
         .apply {
           put("clientName", record.clientName)
           put("className", record.className)
+          put("organizer", record.organizer)
+          put("guardianName", record.guardianName)
+          put("guardianPhone", record.guardianPhone)
           put("notes", record.notes)
           put("summaryMatter", record.summaryMatter)
           put("summaryQuestions", record.summaryQuestions)
+          put("programStrengthsWeaknesses", record.programStrengthsWeaknesses)
           put("summaryIntervention", record.summaryIntervention)
         }
         .toString()
 
     val encrypted = E2eeCryptoManager.encryptString(sensitiveJson, masterKey)
     val hasSummary =
-      record.summaryMatter.isNotBlank() ||
-        record.summaryQuestions.isNotBlank() ||
-        record.summaryIntervention.isNotBlank()
+      record.category != ActivityCategory.KELAS_GANTI &&
+        (record.summaryMatter.isNotBlank() ||
+          record.summaryQuestions.isNotBlank() ||
+          record.programStrengthsWeaknesses.isNotBlank() ||
+          record.summaryIntervention.isNotBlank())
 
     try {
       if (isNew) {
@@ -320,6 +326,9 @@ class CounselorRepository(
       category = ActivityCategory.fromKey(dto.category),
       clientName = json.optString("clientName", ""),
       className = json.optString("className", ""),
+      organizer = json.optString("organizer", ""),
+      guardianName = json.optString("guardianName", ""),
+      guardianPhone = json.optString("guardianPhone", ""),
       sessionDateMillis = dto.sessionDateMillis,
       dayName = dto.dayName,
       timeRange = dto.timeRange,
@@ -327,6 +336,7 @@ class CounselorRepository(
       notes = json.optString("notes", ""),
       summaryMatter = json.optString("summaryMatter", ""),
       summaryQuestions = json.optString("summaryQuestions", ""),
+      programStrengthsWeaknesses = json.optString("programStrengthsWeaknesses", ""),
       summaryIntervention = json.optString("summaryIntervention", ""),
       hasAiSummary = dto.hasAiSummary,
       encryptionVersion = dto.encryptionVersion,

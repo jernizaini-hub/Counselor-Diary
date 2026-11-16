@@ -20,6 +20,7 @@ import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
 import androidx.core.content.FileProvider
+import com.example.model.ActivityCategory
 import com.example.model.CounselingRecord
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -39,6 +40,7 @@ object ReportExporter {
   fun buildSuggestedFileName(record: CounselingRecord, extension: String): String {
     val safeName =
       record.clientName
+        .ifBlank { record.className }
         .ifBlank { record.category.shortLabel }
         .replace(Regex("[^a-zA-Z0-9_-]"), "_")
         .take(28)
@@ -171,16 +173,7 @@ object ReportExporter {
 
     // Metadata Box
     val formattedDate = dateFormatter.format(Date(record.sessionDateMillis))
-    val metaRows =
-      listOf(
-        "Kategori" to record.category.displayName,
-        "Nama Klien / Peserta" to record.clientName.ifBlank { "-" },
-        "Kelas / Kumpulan" to record.className.ifBlank { "-" },
-        "Hari & Tarikh" to "${record.dayName.ifBlank { "-" }}, $formattedDate",
-        "Masa & Tempoh" to "${record.timeRange.ifBlank { "-" }} (${record.durationMinutes} minit)",
-        "Kaunselor" to
-          listOf(counselorName, counselorEmail).filter { it.isNotBlank() }.joinToString(" • "),
-      )
+    val metaRows = buildExportMetaRows(record, formattedDate, counselorName, counselorEmail)
 
     val boxHeight = metaRows.size * 22f + 16f
     fillPaint.color = surfaceCream
@@ -236,39 +229,41 @@ object ReportExporter {
     }
 
     drawTextBlock(
-      "TRANSKRIP PERBUALAN / CATATAN KAUNSELOR",
+      notesHeadingFor(record.category),
       record.notes,
       sagePrimary,
     )
 
-    // Summary Section Header
-    if (y + 40f > pageHeight - 60f) {
-      y = newPage()
-    }
-    fillPaint.color = warmAccent
-    canvas.drawRoundRect(
-      RectF(margin, y, pageWidth - margin, y + 26f),
-      6f,
-      6f,
-      fillPaint,
-    )
-    val summaryHeaderPaint =
-      TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE
-        textSize = 11f
-        typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+    val summaryBlocks = buildExportSummaryBlocks(record)
+    if (summaryBlocks.isNotEmpty()) {
+      if (y + 40f > pageHeight - 60f) {
+        y = newPage()
       }
-    canvas.drawText(
-      "KOTAK RUMUSAN & ANALISIS AI",
-      margin + 12f,
-      y + 17f,
-      summaryHeaderPaint,
-    )
-    y += 42f
+      fillPaint.color = warmAccent
+      canvas.drawRoundRect(
+        RectF(margin, y, pageWidth - margin, y + 26f),
+        6f,
+        6f,
+        fillPaint,
+      )
+      val summaryHeaderPaint =
+        TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+          color = Color.WHITE
+          textSize = 11f
+          typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        }
+      canvas.drawText(
+        summarySectionTitleFor(record.category),
+        margin + 12f,
+        y + 17f,
+        summaryHeaderPaint,
+      )
+      y += 42f
 
-    drawTextBlock("1. PERKARA (ISU UTAMA)", record.summaryMatter, warmAccent)
-    drawTextBlock("2. PERSOALAN", record.summaryQuestions, warmAccent)
-    drawTextBlock("3. HURAIAN INTERVENSI", record.summaryIntervention, warmAccent)
+      for ((heading, content) in summaryBlocks) {
+        drawTextBlock(heading, content, warmAccent)
+      }
+    }
 
     // Signature block
     if (y + 80f > pageHeight - 55f) {
@@ -299,20 +294,19 @@ object ReportExporter {
     counselorEmail: String,
   ): ByteArray {
     val formattedDate = dateFormatter.format(Date(record.sessionDateMillis))
+    val metaLines =
+      buildExportMetaRows(record, formattedDate, counselorName, counselorEmail)
+        .map { (label, value) -> "$label: $value" }
+    val summaryLines =
+      buildExportSummaryBlocks(record).map { (heading, value) ->
+        "$heading: ${value.take(120)}"
+      }
     val lines =
-      listOf(
-        "LAPORAN SESI KAUNSELING & AKTIVITI",
-        "Kategori: ${record.category.displayName}",
-        "Nama Klien: ${record.clientName.ifBlank { "-" }}",
-        "Kelas: ${record.className.ifBlank { "-" }}",
-        "Hari & Tarikh: ${record.dayName}, $formattedDate",
-        "Masa: ${record.timeRange} (${record.durationMinutes} min)",
-        "Kaunselor: $counselorName ($counselorEmail)",
-        "Catatan: ${record.notes.take(120)}",
-        "1. Perkara: ${record.summaryMatter.take(120)}",
-        "2. Persoalan: ${record.summaryQuestions.take(120)}",
-        "3. Huraian Intervensi: ${record.summaryIntervention.take(120)}",
-      )
+      listOf("LAPORAN SESI KAUNSELING & AKTIVITI") +
+        metaLines +
+        listOf("${notesHeadingFor(record.category)}: ${record.notes.take(120)}") +
+        summaryLines
+
     fun pdfEsc(s: String) =
       s.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)").replace("\n", " ")
 
@@ -434,6 +428,32 @@ object ReportExporter {
         </w:tc>
       </w:tr>"""
 
+    val tableRowsXml =
+      buildExportMetaRows(record, formattedDate, counselorName, counselorEmail)
+        .joinToString("\n") { (label, value) -> tableRow(label, value) }
+
+    val summaryBlocks = buildExportSummaryBlocks(record)
+    val summaryXml =
+      if (summaryBlocks.isEmpty()) {
+        ""
+      } else {
+        buildString {
+          append(
+            paragraph(
+              summarySectionTitleFor(record.category),
+              bold = true,
+              sizeHalfPt = 26,
+              colorHex = "C26D38",
+              spaceAfter = 100,
+            )
+          )
+          summaryBlocks.forEach { (heading, value) ->
+            append(paragraph(heading, bold = true, sizeHalfPt = 22, colorHex = "1A6B5A", spaceAfter = 60))
+            append(paragraph(value.ifBlank { "Tiada maklumat direkodkan." }, spaceAfter = 140))
+          }
+        }
+      }
+
     val documentXml =
       """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
@@ -452,23 +472,12 @@ object ReportExporter {
           <w:insideV w:val="single" w:sz="4" w:space="0" w:color="D6D0C4"/>
         </w:tblBorders>
       </w:tblPr>
-      ${tableRow("Kategori", record.category.displayName)}
-      ${tableRow("Nama Klien / Peserta", record.clientName)}
-      ${tableRow("Kelas / Kumpulan", record.className)}
-      ${tableRow("Hari & Tarikh", "${record.dayName}, $formattedDate")}
-      ${tableRow("Masa & Tempoh", "${record.timeRange} (${record.durationMinutes} minit)")}
-      ${tableRow("Kaunselor", listOf(counselorName, counselorEmail).filter { it.isNotBlank() }.joinToString(" • "))}
+      $tableRowsXml
     </w:tbl>
     ${paragraph("", spaceAfter = 120)}
-    ${paragraph("TRANSKRIP PERBUALAN / CATATAN KAUNSELOR", bold = true, sizeHalfPt = 24, colorHex = "1A6B5A", spaceAfter = 80)}
+    ${paragraph(notesHeadingFor(record.category), bold = true, sizeHalfPt = 24, colorHex = "1A6B5A", spaceAfter = 80)}
     ${paragraph(record.notes.ifBlank { "Tiada catatan direkodkan." }, spaceAfter = 180)}
-    ${paragraph("KOTAK RUMUSAN & ANALISIS AI", bold = true, sizeHalfPt = 26, colorHex = "C26D38", spaceAfter = 100)}
-    ${paragraph("1. Perkara (Isu Utama)", bold = true, sizeHalfPt = 22, colorHex = "1A6B5A", spaceAfter = 60)}
-    ${paragraph(record.summaryMatter.ifBlank { "Belum dijana." }, spaceAfter = 140)}
-    ${paragraph("2. Persoalan", bold = true, sizeHalfPt = 22, colorHex = "1A6B5A", spaceAfter = 60)}
-    ${paragraph(record.summaryQuestions.ifBlank { "Belum dijana." }, spaceAfter = 140)}
-    ${paragraph("3. Huraian Intervensi", bold = true, sizeHalfPt = 22, colorHex = "1A6B5A", spaceAfter = 60)}
-    ${paragraph(record.summaryIntervention.ifBlank { "Belum dijana." }, spaceAfter = 240)}
+    $summaryXml
     ${paragraph("________________________________________", spaceAfter = 40)}
     ${paragraph("Tandatangan Kaunselor • Dijana pada $generatedOn", sizeHalfPt = 18, colorHex = "5C6662", spaceAfter = 80)}
     <w:sectPr>
@@ -559,4 +568,120 @@ object ReportExporter {
       }
     context.startActivity(Intent.createChooser(intent, "Kongsi / Cetak Laporan"))
   }
+
+  internal fun buildExportMetaRows(
+    record: CounselingRecord,
+    formattedDate: String,
+    counselorName: String,
+    counselorEmail: String,
+  ): List<Pair<String, String>> {
+    val counselorDisplay =
+      listOf(counselorName, counselorEmail).filter { it.isNotBlank() }.joinToString(" • ")
+    val dateRow = "Hari & Tarikh" to "${record.dayName.ifBlank { "-" }}, $formattedDate"
+    val timeRow =
+      "Masa & Tempoh" to "${record.timeRange.ifBlank { "-" }} (${record.durationMinutes} minit)"
+    val counselorRow = "Kaunselor" to counselorDisplay.ifBlank { "-" }
+
+    return when (record.category) {
+      ActivityCategory.PROGRAM ->
+        listOf(
+          "Kategori" to record.category.displayName,
+          "Nama Program" to record.clientName.ifBlank { "-" },
+          "Anjuran" to record.organizer.ifBlank { "-" },
+          "Sasaran" to record.className.ifBlank { "-" },
+          dateRow,
+          timeRow,
+          counselorRow,
+        )
+
+      ActivityCategory.KELAS_GANTI ->
+        listOf(
+          "Kategori" to record.category.displayName,
+          "Nama Kelas / Tingkatan" to record.className.ifBlank { "-" },
+          dateRow,
+          timeRow,
+          counselorRow,
+        )
+
+      ActivityCategory.MESYUARAT ->
+        listOf(
+          "Kategori" to record.category.displayName,
+          "Nama Mesyuarat" to record.clientName.ifBlank { "-" },
+          dateRow,
+          timeRow,
+          counselorRow,
+        )
+
+      ActivityCategory.ZIARAH_CAKNA,
+      ActivityCategory.KONSULTASI_IBUBAPA ->
+        listOf(
+          "Kategori" to record.category.displayName,
+          "Nama Murid" to record.clientName.ifBlank { "-" },
+          "Kelas Murid" to record.className.ifBlank { "-" },
+          "Nama Penjaga" to record.guardianName.ifBlank { "-" },
+          "No. HP Penjaga" to record.guardianPhone.ifBlank { "-" },
+          dateRow,
+          timeRow,
+          counselorRow,
+        )
+
+      else ->
+        listOf(
+          "Kategori" to record.category.displayName,
+          "Nama Klien / Peserta" to record.clientName.ifBlank { "-" },
+          "Kelas / Kumpulan" to record.className.ifBlank { "-" },
+          dateRow,
+          timeRow,
+          counselorRow,
+        )
+    }
+  }
+
+  internal fun notesHeadingFor(category: ActivityCategory): String =
+    when (category) {
+      ActivityCategory.KELAS_GANTI -> "RINGKASAN AKTIVITI KELAS GANTI"
+      ActivityCategory.MESYUARAT -> "CATATAN / MINIT RINGKAS MESYUARAT"
+      ActivityCategory.ZIARAH_CAKNA,
+      ActivityCategory.KONSULTASI_IBUBAPA -> "CATATAN PERBINCANGAN BERSAMA PENJAGA"
+      else -> "TRANSKRIP PERBUALAN / CATATAN KAUNSELOR"
+    }
+
+  internal fun summarySectionTitleFor(category: ActivityCategory): String =
+    when (category) {
+      ActivityCategory.PROGRAM -> "KOTAK RUMUSAN PROGRAM & ANALISIS AI"
+      ActivityCategory.ZIARAH_CAKNA,
+      ActivityCategory.KONSULTASI_IBUBAPA -> "KOTAK RUMUSAN PERBINCANGAN & ANALISIS AI"
+      else -> "KOTAK RUMUSAN & ANALISIS AI"
+    }
+
+  internal fun buildExportSummaryBlocks(record: CounselingRecord): List<Pair<String, String>> =
+    when (record.category) {
+      ActivityCategory.KELAS_GANTI -> emptyList()
+      ActivityCategory.PROGRAM ->
+        listOf(
+          "1. RUMUSAN PROGRAM" to record.summaryMatter,
+          "2. OBJEKTIF" to record.summaryQuestions,
+          "3. KELEBIHAN & KELEMAHAN" to record.programStrengthsWeaknesses,
+          "4. HURAIAN INTERVENSI" to record.summaryIntervention,
+        )
+      ActivityCategory.ZIARAH_CAKNA,
+      ActivityCategory.KONSULTASI_IBUBAPA ->
+        listOf(
+          "1. RUMUSAN PERBINCANGAN" to record.summaryMatter,
+          "2. ISU / PERSOALAN DIKEMUKAKAN" to record.summaryQuestions,
+          "3. TINDAKAN / SUSULAN" to record.summaryIntervention,
+        )
+      ActivityCategory.MESYUARAT ->
+        listOf(
+          "1. RUMUSAN AGENDA / PERKARA" to record.summaryMatter,
+          "2. PERSOALAN / ISU BERBANGKIT" to record.summaryQuestions,
+          "3. KEPUTUSAN & TINDAKAN SUSULAN" to record.summaryIntervention,
+        )
+      else ->
+        listOf(
+          "1. PERKARA (ISU UTAMA)" to record.summaryMatter,
+          "2. PERSOALAN" to record.summaryQuestions,
+          "3. HURAIAN INTERVENSI" to record.summaryIntervention,
+        )
+    }
 }

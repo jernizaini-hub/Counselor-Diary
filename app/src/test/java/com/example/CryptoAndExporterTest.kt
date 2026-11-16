@@ -83,4 +83,41 @@ class CryptoAndExporterTest {
     assertTrue(entries.contains("word/document.xml"))
     assertTrue(entries.contains("word/styles.xml"))
   }
+
+  @Test
+  fun counselorAiParser_parsesProgramFourFieldsAndExporterAdaptsCategories() {
+    val programJson =
+      """
+      {
+        "rumusanProgram": "Program berjalan lancar dengan penyertaan 120 murid.",
+        "objektif": "Meningkatkan kesedaran kesihatan mental murid.",
+        "kelebihanKelemahan": "Kelebihan: penceramah berkesan. Kelemahan: masa soal jawab terhad.",
+        "huraianIntervensi": "Edar borang saringan DASS kepada murid berisiko."
+      }
+      """.trimIndent()
+    val parsed = com.example.data.ai.CounselorAiService.parseSummaryJson(ActivityCategory.PROGRAM, programJson)
+    assertEquals("Program berjalan lancar dengan penyertaan 120 murid.", parsed.matter)
+    assertEquals("Meningkatkan kesedaran kesihatan mental murid.", parsed.questions)
+    assertEquals(
+      "Kelebihan: penceramah berkesan. Kelemahan: masa soal jawab terhad.",
+      parsed.strengthsWeaknesses,
+    )
+    assertEquals("Edar borang saringan DASS kepada murid berisiko.", parsed.intervention)
+
+    val kelasGanti =
+      CounselingRecord(
+        id = "rec_kg",
+        category = ActivityCategory.KELAS_GANTI,
+        className = "4 Tekun",
+        dayName = "Khamis",
+        timeRange = "10:30 - 11:15",
+        durationMinutes = 45,
+        notes = "Aktiviti ulang kaji bersama kelas.",
+      )
+    assertTrue(ReportExporter.buildExportSummaryBlocks(kelasGanti).isEmpty())
+    assertTrue(ReportExporter.buildSuggestedFileName(kelasGanti, "pdf").contains("4_Tekun"))
+
+    val docxBytes = ReportExporter.generateDocxBytes(kelasGanti, "Cikgu Aisyah", "aisyah@sekolah.edu.my")
+    assertTrue(docxBytes.size > 500)
+  }
 }

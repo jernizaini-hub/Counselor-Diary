@@ -505,15 +505,8 @@ class CounselorViewModel(
 
   // --- AI Summary Generation ---
 
-  fun generateAiSummary(
-    category: ActivityCategory,
-    clientName: String,
-    className: String,
-    dayName: String,
-    timeRange: String,
-    rawNotes: String,
-  ) {
-    if (rawNotes.isBlank()) {
+  fun generateAiSummary(draft: CounselingRecord) {
+    if (draft.notes.isBlank()) {
       _aiSummaryState.value =
         AiSummaryState.Error(
           "Sila masukkan transkrip perbualan atau catatan ringkas terlebih dahulu."
@@ -523,15 +516,7 @@ class CounselorViewModel(
     viewModelScope.launch {
       _aiSummaryState.value = AiSummaryState.Loading
       try {
-        val result =
-          aiService.generateCounselingSummary(
-            category = category,
-            clientName = clientName,
-            className = className,
-            dayName = dayName,
-            timeRange = timeRange,
-            rawTranscriptOrNotes = rawNotes,
-          )
+        val result = aiService.generateCounselingSummary(draft)
         _aiSummaryState.value = AiSummaryState.Success(result)
       } catch (e: CancellationException) {
         throw e
