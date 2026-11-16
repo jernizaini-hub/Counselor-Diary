@@ -254,7 +254,7 @@ private fun AuthenticatedCounselorApp(
             val db = FirebaseFirestore.getInstance(databaseId)
             CounselorViewModel(
               repository = CounselorRepository(db, Firebase.auth),
-              aiService = CounselorAiService(),
+              aiService = CounselorAiService(app),
               currentUserId = currentUserId,
               userEmail = counselorEmail,
               vaultKeyCache = AndroidVaultKeyCache(app),
