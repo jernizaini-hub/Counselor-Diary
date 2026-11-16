@@ -390,13 +390,10 @@ internal class ResilientRecaptchaAppCheckProvider(
       val endpoint =
         "https://firebaseappcheck.googleapis.com/v1/projects/$projectId/apps/$appId:exchangeRecaptchaEnterpriseToken?key=$apiKey"
       val payloadBytes =
-        JSONObject()
-          .apply {
-            put("recaptchaToken", recaptchaToken)
-            put("limitedUse", limitedUse)
-          }
-          .toString()
-          .toByteArray(StandardCharsets.UTF_8)
+        buildExchangeRecaptchaPayloadJson(
+          recaptchaToken = recaptchaToken,
+          limitedUse = limitedUse,
+        ).toByteArray(StandardCharsets.UTF_8)
 
       val url = URL(endpoint)
       val connection = (url.openConnection() as HttpURLConnection)
@@ -448,6 +445,19 @@ internal class ResilientRecaptchaAppCheckProvider(
       }
     }
 }
+
+internal fun buildExchangeRecaptchaPayloadJson(
+  recaptchaToken: String,
+  limitedUse: Boolean,
+): String =
+  JSONObject()
+    .apply {
+      put("recaptchaEnterpriseToken", recaptchaToken)
+      if (limitedUse) {
+        put("limited_use", true)
+      }
+    }
+    .toString()
 
 internal fun isUsableAppCheckToken(token: AppCheckToken?): Boolean {
   if (token == null) return false

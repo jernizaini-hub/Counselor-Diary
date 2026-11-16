@@ -148,4 +148,21 @@ class AppCheckHelperTest {
       ResilientAppCheckToken("valid.jwt.token", System.currentTimeMillis() + 3_600_000L)
     assertTrue(isUsableAppCheckToken(valid))
   }
+
+  @Test
+  fun `buildExchangeRecaptchaPayloadJson uses recaptchaEnterpriseToken and limited_use keys`() {
+    val standardJson =
+      com.example.data.firebase.buildExchangeRecaptchaPayloadJson("tok-abc", limitedUse = false)
+    val standardParsed = org.json.JSONObject(standardJson)
+    assertEquals("tok-abc", standardParsed.getString("recaptchaEnterpriseToken"))
+    assertFalse(standardParsed.has("recaptchaToken"))
+    assertFalse(standardParsed.has("limited_use"))
+
+    val limitedJson =
+      com.example.data.firebase.buildExchangeRecaptchaPayloadJson("tok-xyz", limitedUse = true)
+    val limitedParsed = org.json.JSONObject(limitedJson)
+    assertEquals("tok-xyz", limitedParsed.getString("recaptchaEnterpriseToken"))
+    assertTrue(limitedParsed.getBoolean("limited_use"))
+    assertFalse(limitedParsed.has("limitedUse"))
+  }
 }
