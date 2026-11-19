@@ -137,12 +137,12 @@ class CounselorRepository(
             "wrappedMasterKey" to config.wrappedMasterKey,
             "wrappedMasterKeyIv" to config.wrappedMasterKeyIv,
             "totpEnabled" to config.totpEnabled,
-            "wrappedTotpSecret" to (config.wrappedTotpSecret ?: FieldValue.delete()),
-            "wrappedTotpIv" to (config.wrappedTotpIv ?: FieldValue.delete()),
-            "recoveryCodeHash" to (config.recoveryCodeHash ?: FieldValue.delete()),
             "createdAt" to createdAt,
             "updatedAt" to FieldValue.serverTimestamp(),
           )
+        config.wrappedTotpSecret?.let { updatePayload["wrappedTotpSecret"] = it }
+        config.wrappedTotpIv?.let { updatePayload["wrappedTotpIv"] = it }
+        config.recoveryCodeHash?.let { updatePayload["recoveryCodeHash"] = it }
         docRef.set(updatePayload).await()
       }
     } catch (e: CancellationException) {

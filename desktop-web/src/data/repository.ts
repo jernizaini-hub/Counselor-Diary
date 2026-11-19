@@ -1,7 +1,6 @@
 import {
   collection,
   deleteDoc,
-  deleteField,
   doc,
   getDoc,
   getDocs,
@@ -128,12 +127,12 @@ export async function saveVaultConfig(
       wrappedMasterKey: config.wrappedMasterKey,
       wrappedMasterKeyIv: config.wrappedMasterKeyIv,
       totpEnabled: config.totpEnabled,
-      wrappedTotpSecret: config.wrappedTotpSecret ?? deleteField(),
-      wrappedTotpIv: config.wrappedTotpIv ?? deleteField(),
-      recoveryCodeHash: config.recoveryCodeHash ?? deleteField(),
       createdAt: config.createdAt,
       updatedAt: serverTimestamp(),
     };
+    if (config.wrappedTotpSecret) updatePayload.wrappedTotpSecret = config.wrappedTotpSecret;
+    if (config.wrappedTotpIv) updatePayload.wrappedTotpIv = config.wrappedTotpIv;
+    if (config.recoveryCodeHash) updatePayload.recoveryCodeHash = config.recoveryCodeHash;
     await setDoc(ref, updatePayload);
   }
 }

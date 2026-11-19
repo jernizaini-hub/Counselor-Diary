@@ -242,4 +242,8 @@ test('Desktop repository strictly complies with firestore.rules keys (no id fiel
     repoSrc.includes("record.category !== 'KELAS_GANTI'"),
     'KELAS_GANTI must force hasAiSummary to false'
   );
+  assert.ok(
+    !repoSrc.includes('deleteField('),
+    'Repository must not pass deleteField() into non-merge setDoc()'
+  );
 });
