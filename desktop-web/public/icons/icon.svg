@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0D8A7B"/>
+      <stop offset="100%" stop-color="#0A5C52"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="140" y1="120" x2="380" y2="390" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#5EEAD4"/>
+      <stop offset="100%" stop-color="#F8FBFA"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <rect x="116" y="92" width="280" height="328" rx="34" fill="#F8FBFA"/>
+  <rect x="116" y="92" width="52" height="328" rx="16" fill="#D5EFEA"/>
+  <rect x="196" y="150" width="156" height="22" rx="11" fill="#0D8A7B"/>
+  <rect x="196" y="196" width="124" height="16" rx="8" fill="#89B9B2"/>
+  <rect x="196" y="230" width="144" height="16" rx="8" fill="#B5D6D1"/>
+  <circle cx="348" cy="348" r="68" fill="#EA6A2B"/>
+  <path d="M348 310c-12 0-22 10-22 22v10h-6c-4.4 0-8 3.6-8 8v30c0 4.4 3.6 8 8 8h56c4.4 0 8-3.6 8-8v-30c0-4.4-3.6-8-8-8h-6v-10c0-12-10-22-22-22zm-10 32v-10c0-5.5 4.5-10 10-10s10 4.5 10 10v10h-20z" fill="#FFFFFF"/>
+</svg>

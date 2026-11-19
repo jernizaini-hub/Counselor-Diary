@@ -1,0 +1,33 @@
+{
+  "name": "Diari Kaunselor — Versi Desktop",
+  "short_name": "Diari Kaunselor",
+  "description": "Ruang kerja kaunseling & aktiviti tersulit hujung-ke-hujung (E2EE) yang disegerakkan masa nyata dengan aplikasi Android.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#F8FBFA",
+  "theme_color": "#0D8A7B",
+  "lang": "ms",
+  "categories": ["productivity", "education"],
+  "icons": [
+    {
+      "src": "./icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
