@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { onAuthStateChanged, type User } from 'firebase/auth';
-import { CheckCircle2, Loader2 } from 'lucide-react';
+import { CheckCircle2, Loader2, RefreshCw, ShieldAlert } from 'lucide-react';
 import {
   auth,
   completePendingRedirectSignIn,
@@ -26,6 +26,7 @@ import {
   saveRecord,
   saveVaultConfig,
   subscribeEncryptedRecords,
+  subscribeVaultConfig,
 } from './data/repository';
 import {
   InvalidGeminiApiKeyError,
@@ -83,6 +84,7 @@ export function App() {
 
   const [encryptedDtos, setEncryptedDtos] = useState<EncryptedCounselingRecordDto[]>([]);
   const [records, setRecords] = useState<CounselingRecord[]>([]);
+  const [undecryptableCount, setUndecryptableCount] = useState(0);
   const [syncStatus, setSyncStatus] = useState<'syncing' | 'synced' | 'error'>('syncing');
   const [syncLabel, setSyncLabel] = useState('Menyambung ke awan...');
 
@@ -156,6 +158,7 @@ export function App() {
         setVault({ state: 'idle' });
         setEncryptedDtos([]);
         setRecords([]);
+        setUndecryptableCount(0);
         setActiveDraft(null);
         setIsDirty(false);
         setSavedGeminiKey('');
@@ -221,9 +224,43 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (user) {
-      void initializeVault(user.uid);
-    }
+    if (!user) return;
+    void initializeVault(user.uid);
+    const unsub = subscribeVaultConfig(
+      user.uid,
+      (latestConfig) => {
+        if (!latestConfig) return;
+        setVault((current) => {
+          if (
+            current.state === 'unlocked' &&
+            current.config.wrappedMasterKey === latestConfig.wrappedMasterKey
+          ) {
+            return current;
+          }
+          // Re-unwrap automatically when Android updates vaultConfig in cloud
+          void (async () => {
+            try {
+              const kek = await deriveKeyFromSecret(
+                autoVaultSecret(user.uid),
+                latestConfig.kdfSalt,
+                'kek'
+              );
+              const masterKey = await unwrapSecretKey(
+                latestConfig.wrappedMasterKey,
+                latestConfig.wrappedMasterKeyIv,
+                kek
+              );
+              setVault({ state: 'unlocked', config: latestConfig, masterKey });
+            } catch {
+              // ignore if still legacy PIN
+            }
+          })();
+          return current;
+        });
+      },
+      () => undefined
+    );
+    return () => unsub();
   }, [user, initializeVault]);
 
   // Real-time Firestore listener for encrypted records
@@ -268,6 +305,7 @@ export function App() {
       decryptedList.sort((a, b) => b.sessionDateMillis - a.sessionDateMillis);
       if (!cancelled) {
         setRecords(decryptedList);
+        setUndecryptableCount(Math.max(0, encryptedDtos.length - decryptedList.length));
         // Keep activeDraft synced if clean & updated from Android
         setActiveDraft((current) => {
           if (!current || !current.id || isDirty) return current;
@@ -616,6 +654,40 @@ export function App() {
               onClick={() => void initializeVault(user.uid)}
             >
               Cuba Semula
+            </button>
+          </div>
+        )}
+
+        {vault.state === 'unlocked' && undecryptableCount > 0 && (
+          <div
+            style={{
+              padding: '12px 24px',
+              background: 'var(--secondary-soft)',
+              borderBottom: '1px solid var(--outline)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 14,
+              flexWrap: 'wrap',
+              fontSize: 13,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <ShieldAlert size={18} style={{ color: 'var(--secondary)', flexShrink: 0 }} />
+              <span>
+                <strong>{undecryptableCount} rekod tersulit</strong> ditemui di awan daripada
+                aplikasi Android, menunggu penyelarasan kunci E2EE. Sila kemas kini dan buka
+                aplikasi Android anda sekali (<strong>jangan nyahpasang / uninstall</strong>)
+                supaya kunci disegerakkan secara automatik.
+              </span>
+            </div>
+            <button
+              type="button"
+              className="btn btn-outline"
+              onClick={() => void initializeVault(user.uid)}
+            >
+              <RefreshCw size={14} />
+              <span>Semak Semula Kunci</span>
             </button>
           </div>
         )}

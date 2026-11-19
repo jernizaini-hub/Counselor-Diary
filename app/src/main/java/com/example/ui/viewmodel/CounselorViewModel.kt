@@ -339,6 +339,7 @@ class CounselorViewModel(
             localVaultConfigFlow.value = localCached.config
             unlockedKeyFlow.value = localCached.masterKey
             legacyMigrationConfigFlow.value = null
+            reconcileLocalVaultWithCloudInBackground(localCached.config, localCached.masterKey)
             return@launch
           }
 
@@ -470,6 +471,130 @@ class CounselorViewModel(
       }
     }
   }
+
+  private fun reconcileLocalVaultWithCloudInBackground(
+    localConfig: VaultConfigDto,
+    localMasterKey: SecretKey,
+  ) {
+    viewModelScope.launch {
+      try {
+        reconcileLocalVaultWithCloud(localConfig, localMasterKey)
+      } catch (e: CancellationException) {
+        throw e
+      } catch (e: Exception) {
+        Log.w(TAG, "Background vaultConfig reconciliation deferred/failed", e)
+      }
+    }
+  }
+
+  private suspend fun reconcileLocalVaultWithCloud(
+    localConfig: VaultConfigDto,
+    localMasterKey: SecretKey,
+  ) {
+    val serverConfig =
+      withTimeout(FIRESTORE_UNLOCK_TIMEOUT_MS) { repository.getVaultConfig(Source.SERVER) }
+
+    if (serverConfig == null) {
+      val fresh = buildAutoConfigForMasterKey(localMasterKey, existingServerConfig = null)
+      repository.saveVaultConfig(fresh, isNew = true)
+      val saved =
+        withTimeout(FIRESTORE_UNLOCK_TIMEOUT_MS) { repository.getVaultConfig(Source.SERVER) }
+          ?: fresh
+      persistLocalAndUnlock(saved, localMasterKey)
+      return
+    }
+
+    if (serverConfig.wrappedMasterKey == localConfig.wrappedMasterKey) {
+      if (localConfig.createdAt == null && serverConfig.createdAt != null) {
+        persistLocalAndUnlock(serverConfig, localMasterKey)
+      }
+      return
+    }
+
+    val serverMasterKey = tryUnwrapWithAutoSecret(serverConfig)
+    if (serverMasterKey != null && serverMasterKey.encoded.contentEquals(localMasterKey.encoded)) {
+      persistLocalAndUnlock(serverConfig, localMasterKey)
+      return
+    }
+
+    val dtos = withTimeout(FIRESTORE_UNLOCK_TIMEOUT_MS) { repository.getEncryptedRecords() }
+    val localOnlyDtos = mutableListOf<EncryptedCounselingRecordDto>()
+    val serverOnlyDtos = mutableListOf<EncryptedCounselingRecordDto>()
+    var localDecryptedCount = 0
+    var serverDecryptedCount = 0
+
+    for (dto in dtos) {
+      val decLocal = canDecryptRecord(dto, localMasterKey)
+      val decServer = serverMasterKey != null && canDecryptRecord(dto, serverMasterKey)
+      if (decLocal) localDecryptedCount += 1
+      if (decServer) serverDecryptedCount += 1
+      if (decLocal && !decServer) localOnlyDtos.add(dto)
+      if (decServer && !decLocal) serverOnlyDtos.add(dto)
+    }
+
+    if (serverMasterKey == null || localDecryptedCount >= serverDecryptedCount) {
+      // Android local key is authoritative: migrate any desktop/server-only records to localMasterKey first
+      if (serverMasterKey != null) {
+        for (dto in serverOnlyDtos) {
+          val decrypted = repository.decryptRecord(dto, serverMasterKey)
+          repository.saveRecord(decrypted, localMasterKey)
+        }
+      }
+      val healedConfig = buildAutoConfigForMasterKey(localMasterKey, existingServerConfig = serverConfig)
+      repository.saveVaultConfig(healedConfig, isNew = false)
+      persistLocalAndUnlock(healedConfig, localMasterKey)
+    } else {
+      // Server key decrypts more records: migrate any local-only records to serverMasterKey first
+      for (dto in localOnlyDtos) {
+        val decrypted = repository.decryptRecord(dto, localMasterKey)
+        repository.saveRecord(decrypted, serverMasterKey)
+      }
+      persistLocalAndUnlock(serverConfig, serverMasterKey)
+    }
+  }
+
+  private fun canDecryptRecord(dto: EncryptedCounselingRecordDto, key: SecretKey): Boolean =
+    try {
+      repository.decryptRecord(dto, key)
+      true
+    } catch (_: Exception) {
+      false
+    }
+
+  private suspend fun buildAutoConfigForMasterKey(
+    masterKey: SecretKey,
+    existingServerConfig: VaultConfigDto?,
+  ): VaultConfigDto =
+    coroutineScope {
+      val secret = autoVaultSecret(currentUserId)
+      val salt = E2eeCryptoManager.generateSaltBase64()
+      val kekDeferred = async(Dispatchers.Default) { E2eeCryptoManager.deriveKeyFromPin(secret, salt) }
+      val hashDeferred = async(Dispatchers.Default) { E2eeCryptoManager.hashPinVerifier(secret, salt) }
+      val kek = kekDeferred.await()
+      val pinHash = hashDeferred.await()
+      val wrapped = E2eeCryptoManager.wrapSecretKey(masterKey, kek)
+      if (existingServerConfig == null) {
+        VaultConfigDto(
+          userId = currentUserId,
+          pinHash = pinHash,
+          kdfSalt = salt,
+          wrappedMasterKey = wrapped.ciphertextBase64,
+          wrappedMasterKeyIv = wrapped.ivBase64,
+          totpEnabled = false,
+        )
+      } else {
+        existingServerConfig.copy(
+          pinHash = pinHash,
+          kdfSalt = salt,
+          wrappedMasterKey = wrapped.ciphertextBase64,
+          wrappedMasterKeyIv = wrapped.ivBase64,
+          totpEnabled = false,
+          wrappedTotpSecret = null,
+          wrappedTotpIv = null,
+          recoveryCodeHash = null,
+        )
+      }
+    }
 
   fun migrateLegacyPinToAutoE2ee(config: VaultConfigDto, oldPin: String) {
     if (oldPin.length != 6) {
@@ -690,6 +815,11 @@ class CounselorViewModel(
     viewModelScope.launch {
       _cloudSyncState.value = CloudSyncState.Syncing
       try {
+        val currentConfig = localVaultConfigFlow.value
+        val currentKey = unlockedKeyFlow.value
+        if (currentConfig != null && currentKey != null) {
+          reconcileLocalVaultWithCloud(currentConfig, currentKey)
+        }
         val dtos = repository.getEncryptedRecords()
         _cloudSyncState.value = CloudSyncState.Synced(System.currentTimeMillis(), dtos.size)
         onComplete(dtos.size)
